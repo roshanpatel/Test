@@ -23,6 +23,13 @@ import android.view.accessibility.AccessibilityEvent
 class JoltService : AccessibilityService(), EngineUi {
     private val handler = Handler(Looper.getMainLooper())
     private val tick = Runnable { engine.onTick() }
+    private val blockWatchdog = object : Runnable {
+        override fun run() {
+            if (!engine.isBlocked) return
+            checkScreenDuringBlock()
+            handler.postDelayed(this, WATCHDOG_INTERVAL_MS)
+        }
+    }
     private val activityCache = HashMap<String, Boolean>()
 
     private lateinit var prefs: Prefs
@@ -67,6 +74,7 @@ class JoltService : AccessibilityService(), EngineUi {
         receiverRegistered = true
 
         engine.start()
+        if (engine.isBlocked) startBlockWatchdog()
         rootInActiveWindow?.packageName?.toString()
             ?.takeIf { it != packageName }
             ?.let(::onAppOpened)
@@ -77,25 +85,46 @@ class JoltService : AccessibilityService(), EngineUi {
         val pkg = event.packageName?.toString() ?: return
         if (pkg == packageName || pkg == SYSTEM_UI) return
 
+        val cls = event.className?.toString()
+        val watched = pkg in prefs.watched
+
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                if (engine.isBlocked && isTamperScreen(pkg)) {
+                if (engine.isBlocked && ((watched && !isToast(cls)) || isTamperScreen(pkg))) {
                     kickOut()
                     return
                 }
-                val cls = event.className?.toString()
-                if (cls == null || isActivity(pkg, cls)) onAppOpened(pkg)
+                // Watched apps count on any window change; for other apps only a real screen
+                // (activity) counts, so their pop-ups don't end a watched session.
+                if (cls == null || (watched && !isToast(cls)) || isActivity(pkg, cls)) onAppOpened(pkg)
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
-                // Settings swaps pages without a new window, so recheck as content changes.
-                if (!engine.isBlocked || !needsTextCheck(pkg)) return
+                // Catches a watched app that opened without a window change we recognised
+                // (it fires constantly while scrolling), and Settings swapping pages in place.
+                if (!engine.isBlocked || !(watched || needsTextCheck(pkg))) return
                 val now = SystemClock.elapsedRealtime()
                 if (now - lastTamperCheck < TAMPER_CHECK_INTERVAL_MS) return
                 lastTamperCheck = now
-                if (isTamperScreen(pkg)) kickOut()
+                if (watched && activeWindowPackage() == pkg || isTamperScreen(pkg)) kickOut()
             }
         }
     }
+
+    /** While blocked, keep checking what's on screen in case an event was missed. */
+    private fun checkScreenDuringBlock() {
+        val pkg = activeWindowPackage() ?: return
+        if (pkg == packageName) return
+        if (pkg in prefs.watched || isTamperScreen(pkg)) kickOut()
+    }
+
+    private fun startBlockWatchdog() {
+        handler.removeCallbacks(blockWatchdog)
+        handler.postDelayed(blockWatchdog, WATCHDOG_INTERVAL_MS)
+    }
+
+    private fun activeWindowPackage(): String? = rootInActiveWindow?.packageName?.toString()
+
+    private fun isToast(cls: String?) = cls != null && cls.startsWith("android.widget.Toast")
 
     private fun onAppOpened(pkg: String) {
         lastActivityPkg = pkg
@@ -139,10 +168,13 @@ class JoltService : AccessibilityService(), EngineUi {
 
     override fun hidePrompt() = overlays.hidePrompt()
 
-    override fun showBlock() = overlays.showBlock(
-        remainingMs = { engine.blockRemainingMs() },
-        onDismiss = ::goHome,
-    )
+    override fun showBlock() {
+        overlays.showBlock(
+            remainingMs = { engine.blockRemainingMs() },
+            onDismiss = ::goHome,
+        )
+        startBlockWatchdog()
+    }
 
     override fun hideBlock() = overlays.hideBlock()
 
@@ -172,5 +204,6 @@ class JoltService : AccessibilityService(), EngineUi {
         const val SYSTEM_UI = "com.android.systemui"
         const val PLAY_STORE = "com.android.vending"
         const val TAMPER_CHECK_INTERVAL_MS = 300L
+        const val WATCHDOG_INTERVAL_MS = 1500L
     }
 }

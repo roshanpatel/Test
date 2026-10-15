@@ -19,15 +19,11 @@ class Prefs(context: Context) : StateStore {
         get() = sp.getInt(KEY_BLOCK_MIN, 30)
         set(value) = sp.edit().putInt(KEY_BLOCK_MIN, value).apply()
 
-    var resetMinutes: Int
-        get() = sp.getInt(KEY_RESET_MIN, 30)
-        set(value) = sp.edit().putInt(KEY_RESET_MIN, value).apply()
-
     fun config() = Config(
         watched = watched,
         sessionMs = sessionMinutes * MINUTE_MS,
         blockMs = blockMinutes * MINUTE_MS,
-        resetMs = resetMinutes * MINUTE_MS,
+        resetMs = RESET_AFTER_BREAK_MS,
     )
 
     fun blockRemainingMs(clock: Clock): Long = load().blockRemainingMs(clock)
@@ -58,7 +54,6 @@ class Prefs(context: Context) : StateStore {
         const val KEY_WATCHED = "watched"
         const val KEY_SESSION_MIN = "session_min"
         const val KEY_BLOCK_MIN = "block_min"
-        const val KEY_RESET_MIN = "reset_min"
     }
 }
 

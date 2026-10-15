@@ -15,8 +15,9 @@ A block can't be cancelled. While it runs:
 - Settings screens that mention Jolt are blocked. That covers uninstalling, force-stopping,
   and turning off its accessibility service. So is the system uninstall dialog.
 
-A session starts fresh after 30 minutes away from every watched app. All three times can be
-changed on the main screen when no block is running.
+Leaving the watched apps pauses the session timer, so dipping in and out doesn't reset it. A
+break of 30 minutes or more, or the end of a block, gives you a fresh session. The browse time
+and block length can be changed on the main screen when no block is running.
 
 ## Install on your phone
 

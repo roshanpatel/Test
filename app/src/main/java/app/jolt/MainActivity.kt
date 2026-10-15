@@ -91,7 +91,6 @@ class MainActivity : Activity() {
         column.addView(section("Timings"))
         steppers += Stepper("Browse time before the check", 1, 1, 60, { prefs.sessionMinutes }, { prefs.sessionMinutes = it })
         steppers += Stepper("Block length after PANIC", 5, 5, 240, { prefs.blockMinutes }, { prefs.blockMinutes = it })
-        steppers += Stepper("New session after a break of", 5, 5, 240, { prefs.resetMinutes }, { prefs.resetMinutes = it })
         steppers.forEach { column.addView(it.view, block(top = 8)) }
 
         lockedNote = label("Settings are locked until the block ends.", 14f, Palette.PANIC)

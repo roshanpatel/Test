@@ -4,6 +4,9 @@ package app.jolt
 
 const val MINUTE_MS = 60_000L
 
+/** A break this long away from every watched app starts a fresh session. */
+const val RESET_AFTER_BREAK_MS = 30 * MINUTE_MS
+
 /** Seconds the "time check" pop-up waits before treating silence as PANIC. */
 const val PROMPT_SECONDS = 10
 
