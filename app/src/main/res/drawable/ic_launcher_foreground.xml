@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Lightning bolt -->
+    <path
+        android:fillColor="#FFFFB020"
+        android:pathData="M60,28 L38,58 L52,58 L46,80 L70,48 L56,48 Z" />
+</vector>
