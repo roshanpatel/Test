@@ -20,6 +20,14 @@ changed on the main screen when no block is running.
 
 ## Install on your phone
 
+### Without a computer
+
+Every push to GitHub builds the app and publishes it under **Releases**. On your phone, open the
+repo's Releases page, download `Jolt.apk` from the newest build, open it, and allow your browser
+to install apps when asked. Newer builds install over older ones and keep your settings.
+
+### With Android Studio
+
 1. Install [Android Studio](https://developer.android.com/studio) and open this folder.
    Let it sync. It downloads the Android SDK and Gradle dependencies.
 2. On the phone, turn on Developer options and USB debugging, then plug it in.
