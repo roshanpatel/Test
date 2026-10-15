@@ -12,6 +12,7 @@ A block can't be cancelled. While it runs:
 
 - opening a watched app sends you to the home screen and shows the time left;
 - Jolt's settings and app list are locked;
+- Jolt doesn't appear in the app switcher, so it can't be swiped away;
 - Settings screens that mention Jolt are blocked. That covers uninstalling, force-stopping,
   and turning off its accessibility service. So is the system uninstall dialog.
 

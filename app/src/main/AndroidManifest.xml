@@ -17,8 +17,11 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Jolt">
 
+        <!-- Hidden from the app switcher: swiping Jolt away there kills the process running
+             the blocking service, which would end a block early. -->
         <activity
             android:name=".MainActivity"
+            android:excludeFromRecents="true"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -28,6 +31,7 @@
 
         <activity
             android:name=".AppPickerActivity"
+            android:excludeFromRecents="true"
             android:exported="false" />
 
         <service
