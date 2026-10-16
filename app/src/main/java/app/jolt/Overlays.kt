@@ -32,6 +32,10 @@ class Overlays(private val service: AccessibilityService) {
     private var blockView: View? = null
     private var blockTicker: Runnable? = null
 
+    /**
+     * PANIC works straight away. Continue stays locked until the countdown ends, so carrying
+     * on always costs a pause. The prompt then waits for a choice.
+     */
     fun showPrompt(sessionMinutes: Int, onContinue: () -> Unit, onPanic: () -> Unit) {
         if (promptView != null) return
         val ctx: Context = service
@@ -41,6 +45,9 @@ class Overlays(private val service: AccessibilityService) {
         val countdown = ctx.label("$secondsLeft", 72f, Palette.ACCENT, bold = true).apply {
             gravity = Gravity.CENTER
         }
+        val hint = ctx.label("Take a breath. Continue unlocks when the timer ends.", 13f, Palette.MUTED).apply {
+            gravity = Gravity.CENTER
+        }
 
         fun decide(action: () -> Unit) {
             if (decided) return
@@ -48,6 +55,22 @@ class Overlays(private val service: AccessibilityService) {
             promptTicker?.let(handler::removeCallbacks)
             action()
         }
+
+        val continueButton = ctx.pillButton("", Palette.NEUTRAL) {
+            if (secondsLeft <= 0) decide(onContinue)
+        }
+
+        fun updateContinue() {
+            val unlocked = secondsLeft <= 0
+            continueButton.isEnabled = unlocked
+            continueButton.alpha = if (unlocked) 1f else 0.4f
+            continueButton.text = if (unlocked) {
+                "Continue browsing (+$sessionMinutes min)"
+            } else {
+                "Continue browsing (in ${secondsLeft}s)"
+            }
+        }
+        updateContinue()
 
         val card = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
@@ -59,18 +82,12 @@ class Overlays(private val service: AccessibilityService) {
                 spaced(ctx, top = 8),
             )
             addView(countdown, spaced(ctx, top = 12))
-            addView(
-                ctx.label("No answer = PANIC", 13f, Palette.MUTED).apply { gravity = Gravity.CENTER },
-                spaced(ctx, top = 0),
-            )
+            addView(hint, spaced(ctx, top = 0))
             addView(
                 ctx.pillButton("PANIC BUTTON!", Palette.PANIC) { decide(onPanic) }.apply { textSize = 22f; minHeight = ctx.dp(72) },
                 spaced(ctx, top = 24),
             )
-            addView(
-                ctx.pillButton("Continue browsing (+$sessionMinutes min)", Palette.NEUTRAL) { decide(onContinue) },
-                spaced(ctx, top = 12),
-            )
+            addView(continueButton, spaced(ctx, top = 12))
         }
 
         val root = scrim(ctx, Palette.SCRIM).apply {
@@ -83,8 +100,14 @@ class Overlays(private val service: AccessibilityService) {
         val ticker = object : Runnable {
             override fun run() {
                 secondsLeft -= 1
-                countdown.text = "${secondsLeft.coerceAtLeast(0)}"
-                if (secondsLeft <= 0) decide(onPanic) else handler.postDelayed(this, 1000)
+                updateContinue()
+                if (secondsLeft <= 0) {
+                    countdown.visibility = View.GONE
+                    hint.text = "Your call."
+                } else {
+                    countdown.text = "$secondsLeft"
+                    handler.postDelayed(this, 1000)
+                }
             }
         }
         promptTicker = ticker

@@ -7,7 +7,7 @@ const val MINUTE_MS = 60_000L
 /** A break this long away from every watched app starts a fresh session. */
 const val RESET_AFTER_BREAK_MS = 30 * MINUTE_MS
 
-/** Seconds the "time check" pop-up waits before treating silence as PANIC. */
+/** Seconds the "time check" pop-up keeps Continue locked. PANIC works throughout. */
 const val PROMPT_SECONDS = 10
 
 data class Config(
@@ -75,8 +75,8 @@ interface EngineUi {
 
 /**
  * Time spent in any watched app adds up to one shared session. When it reaches
- * [Config.sessionMs] the prompt is shown. Continue starts a fresh session; PANIC (or no
- * answer) blocks every watched app for [Config.blockMs]. Being away from watched apps for
+ * [Config.sessionMs] the prompt is shown. Continue starts a fresh session; PANIC blocks
+ * every watched app for [Config.blockMs]. Being away from watched apps for
  * [Config.resetMs] also starts a fresh session.
  */
 class SessionEngine(
@@ -150,7 +150,7 @@ class SessionEngine(
         onForeground(currentPkg)
     }
 
-    /** PANIC button, or the prompt running out. */
+    /** PANIC button. */
     fun onPanic() {
         promptShowing = false
         ui.hidePrompt()
