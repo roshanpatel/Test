@@ -91,6 +91,7 @@ class MainActivity : Activity() {
         column.addView(section("Timings"))
         steppers += Stepper("Browse time before the check", 1, 1, 60, { prefs.sessionMinutes }, { prefs.sessionMinutes = it })
         steppers += Stepper("Block length after PANIC", 5, 5, 240, { prefs.blockMinutes }, { prefs.blockMinutes = it })
+        steppers += Stepper("Wait before Continue unlocks", 10, 10, 300, { prefs.pauseSeconds }, { prefs.pauseSeconds = it }, unit = "s")
         steppers.forEach { column.addView(it.view, block(top = 8)) }
 
         lockedNote = label("Settings are locked until the block ends.", 14f, Palette.PANIC)
@@ -189,6 +190,7 @@ class MainActivity : Activity() {
         private val max: Int,
         private val get: () -> Int,
         private val set: (Int) -> Unit,
+        private val unit: String = "min",
     ) {
         private val value = label("", 18f, bold = true).apply {
             gravity = Gravity.CENTER
@@ -208,7 +210,7 @@ class MainActivity : Activity() {
         }
 
         fun update(enabled: Boolean) {
-            value.text = "${get()} min"
+            value.text = "${get()} $unit"
             listOf(minus, plus).forEach {
                 it.isEnabled = enabled
                 it.alpha = if (enabled) 1f else 0.4f

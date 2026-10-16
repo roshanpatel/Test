@@ -2,7 +2,8 @@
 
 An Android app that interrupts doom-scrolling. You pick the apps to watch: Facebook, Chrome, a
 betting app, anything. Time spent in any of them adds up to one shared session. When the session
-runs out (3 minutes by default), a full-screen check appears with a 10-second countdown:
+runs out (3 minutes by default), a full-screen check appears with a countdown (10 seconds by
+default, up to 5 minutes):
 
 - **PANIC BUTTON!** works at any moment: every watched app is blocked for 30 minutes.
 - **Continue browsing** is locked until the countdown ends, then gives you another full
@@ -17,8 +18,8 @@ A block can't be cancelled. While it runs:
   and turning off its accessibility service. So is the system uninstall dialog.
 
 Leaving the watched apps pauses the session timer, so dipping in and out doesn't reset it. A
-break of 30 minutes or more, or the end of a block, gives you a fresh session. The browse time
-and block length can be changed on the main screen when no block is running.
+break of 30 minutes or more, or the end of a block, gives you a fresh session. The browse time,
+block length and countdown can be changed on the main screen when no block is running.
 
 ## Install on your phone
 

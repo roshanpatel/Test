@@ -162,6 +162,7 @@ class JoltService : AccessibilityService(), EngineUi {
 
     override fun showPrompt() = overlays.showPrompt(
         sessionMinutes = prefs.sessionMinutes,
+        pauseSeconds = prefs.pauseSeconds,
         onContinue = { engine.onContinue() },
         onPanic = { engine.onPanic() },
     )

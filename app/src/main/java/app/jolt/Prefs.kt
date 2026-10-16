@@ -19,6 +19,11 @@ class Prefs(context: Context) : StateStore {
         get() = sp.getInt(KEY_BLOCK_MIN, 30)
         set(value) = sp.edit().putInt(KEY_BLOCK_MIN, value).apply()
 
+    /** How long the pop-up keeps Continue locked. */
+    var pauseSeconds: Int
+        get() = sp.getInt(KEY_PAUSE_SEC, DEFAULT_PAUSE_SECONDS)
+        set(value) = sp.edit().putInt(KEY_PAUSE_SEC, value).apply()
+
     fun config() = Config(
         watched = watched,
         sessionMs = sessionMinutes * MINUTE_MS,
@@ -54,6 +59,7 @@ class Prefs(context: Context) : StateStore {
         const val KEY_WATCHED = "watched"
         const val KEY_SESSION_MIN = "session_min"
         const val KEY_BLOCK_MIN = "block_min"
+        const val KEY_PAUSE_SEC = "pause_sec"
     }
 }
 

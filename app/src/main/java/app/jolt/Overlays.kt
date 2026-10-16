@@ -36,13 +36,13 @@ class Overlays(private val service: AccessibilityService) {
      * PANIC works straight away. Continue stays locked until the countdown ends, so carrying
      * on always costs a pause. The prompt then waits for a choice.
      */
-    fun showPrompt(sessionMinutes: Int, onContinue: () -> Unit, onPanic: () -> Unit) {
+    fun showPrompt(sessionMinutes: Int, pauseSeconds: Int, onContinue: () -> Unit, onPanic: () -> Unit) {
         if (promptView != null) return
         val ctx: Context = service
-        var secondsLeft = PROMPT_SECONDS
+        var secondsLeft = pauseSeconds
         var decided = false
 
-        val countdown = ctx.label("$secondsLeft", 72f, Palette.ACCENT, bold = true).apply {
+        val countdown = ctx.label(formatSeconds(secondsLeft), 72f, Palette.ACCENT, bold = true).apply {
             gravity = Gravity.CENTER
         }
         val hint = ctx.label("Take a breath. Continue unlocks when the timer ends.", 13f, Palette.MUTED).apply {
@@ -67,7 +67,7 @@ class Overlays(private val service: AccessibilityService) {
             continueButton.text = if (unlocked) {
                 "Continue browsing (+$sessionMinutes min)"
             } else {
-                "Continue browsing (in ${secondsLeft}s)"
+                "Continue browsing (in ${formatSeconds(secondsLeft)})"
             }
         }
         updateContinue()
@@ -105,7 +105,7 @@ class Overlays(private val service: AccessibilityService) {
                     countdown.visibility = View.GONE
                     hint.text = "Your call."
                 } else {
-                    countdown.text = "$secondsLeft"
+                    countdown.text = formatSeconds(secondsLeft)
                     handler.postDelayed(this, 1000)
                 }
             }
@@ -218,6 +218,9 @@ class Overlays(private val service: AccessibilityService) {
 
     private fun spaced(ctx: Context, top: Int) =
         LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = ctx.dp(top) }
+
+    /** "45" under a minute, "2:05" from a minute up. */
+    private fun formatSeconds(s: Int) = if (s < 60) "$s" else formatMmSs(s * 1000L)
 
     private fun minutes(n: Int) = if (n == 1) "minute" else "minutes"
 

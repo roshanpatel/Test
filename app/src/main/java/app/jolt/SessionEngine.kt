@@ -7,8 +7,8 @@ const val MINUTE_MS = 60_000L
 /** A break this long away from every watched app starts a fresh session. */
 const val RESET_AFTER_BREAK_MS = 30 * MINUTE_MS
 
-/** Seconds the "time check" pop-up keeps Continue locked. PANIC works throughout. */
-const val PROMPT_SECONDS = 10
+/** Default seconds the "time check" pop-up keeps Continue locked. PANIC works throughout. */
+const val DEFAULT_PAUSE_SECONDS = 10
 
 data class Config(
     val watched: Set<String>,
