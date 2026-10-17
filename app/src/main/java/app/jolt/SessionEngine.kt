@@ -33,17 +33,9 @@ data class EngineState(
     val blockBoot: Int = UNKNOWN_BOOT,
     val blockLenMs: Long = 0,
 ) {
-    fun blockRemainingMs(clock: Clock): Long {
-        if (blockLenMs <= 0) return 0
-        val boot = clock.bootCount()
-        val remaining = if (boot != UNKNOWN_BOOT && boot == blockBoot) {
-            blockUntilElapsed - clock.elapsed()
-        } else {
-            blockUntilWall - clock.wall()
-        }
-        // Never longer than the block that was started, whatever the clocks claim.
-        return remaining.coerceIn(0, blockLenMs)
-    }
+    val block get() = Deadline(blockUntilElapsed, blockUntilWall, blockBoot, blockLenMs)
+
+    fun blockRemainingMs(clock: Clock): Long = block.remainingMs(clock)
 
     companion object {
         const val UNKNOWN_BOOT = -1
@@ -94,6 +86,9 @@ class SessionEngine(
 
     val isBlocked: Boolean get() = blockRemainingMs() > 0
 
+    /** Currently in a watched app with the session clock running. */
+    val isTiming: Boolean get() = timingSince != null
+
     fun blockRemainingMs(): Long = state.blockRemainingMs(clock)
 
     /** Call once when the service starts. */
@@ -104,8 +99,16 @@ class SessionEngine(
     /** [pkg] is the app now on screen, or null when the screen is off. */
     fun onForeground(pkg: String?) {
         currentPkg = pkg
-        if (promptShowing) return
         val watched = pkg != null && pkg in config().watched
+        if (promptShowing) {
+            // Leaving the watched apps puts the check away. The session is still used up,
+            // so it comes straight back on returning to any watched app.
+            if (!watched) {
+                promptShowing = false
+                ui.hidePrompt()
+            }
+            return
+        }
         if (isBlocked) {
             if (watched) {
                 ui.goHome()
@@ -137,6 +140,19 @@ class SessionEngine(
         }
     }
 
+    /** Saves time used so far, so it isn't lost if the service is killed mid-session. */
+    fun checkpoint() {
+        val since = timingSince ?: return
+        val now = clock.elapsed()
+        timingSince = now
+        state = state.copy(
+            usedMs = state.usedMs + (now - since),
+            lastActiveElapsed = now,
+            lastActiveBoot = clock.bootCount(),
+        )
+        store.save(state)
+    }
+
     fun onContinue() {
         if (!promptShowing) return
         promptShowing = false
@@ -155,18 +171,18 @@ class SessionEngine(
         promptShowing = false
         ui.hidePrompt()
         timingSince = null
-        val blockMs = config().blockMs
+        val block = Deadline.start(clock, config().blockMs)
         state = state.copy(
             usedMs = 0,
-            blockUntilElapsed = clock.elapsed() + blockMs,
-            blockUntilWall = clock.wall() + blockMs,
-            blockBoot = clock.bootCount(),
-            blockLenMs = blockMs,
+            blockUntilElapsed = block.untilElapsed,
+            blockUntilWall = block.untilWall,
+            blockBoot = block.boot,
+            blockLenMs = block.lenMs,
         )
         store.save(state)
         ui.goHome()
         ui.showBlock()
-        ui.scheduleTick(blockMs)
+        ui.scheduleTick(block.lenMs)
     }
 
     private fun endBlock() {
@@ -204,4 +220,11 @@ class SessionEngine(
 fun formatMmSs(ms: Long): String {
     val totalSeconds = (ms.coerceAtLeast(0) + 999) / 1000
     return "%d:%02d".format(totalSeconds / 60, totalSeconds % 60)
+}
+
+/** 23:41:10 style for durations of an hour or more, otherwise 29:59 style. */
+fun formatDuration(ms: Long): String {
+    val totalSeconds = (ms.coerceAtLeast(0) + 999) / 1000
+    if (totalSeconds < 3600) return formatMmSs(ms)
+    return "%d:%02d:%02d".format(totalSeconds / 3600, totalSeconds / 60 % 60, totalSeconds % 60)
 }

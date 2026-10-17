@@ -146,13 +146,57 @@ class SessionEngineTest {
     }
 
     @Test
-    fun app_switches_while_prompt_showing_are_ignored() {
+    fun prompt_stays_when_switching_between_watched_apps() {
         engine.onForeground(FACEBOOK)
         runFor(3 * MINUTE_MS)
         ui.calls.clear()
         engine.onForeground(CHROME)
         assertTrue(engine.promptShowing)
         assertEquals(emptyList<String>(), ui.calls)
+    }
+
+    @Test
+    fun leaving_watched_apps_puts_prompt_away_until_return() {
+        engine.onForeground(FACEBOOK)
+        runFor(3 * MINUTE_MS)
+        ui.calls.clear()
+
+        engine.onForeground(MAPS)
+        assertFalse(engine.promptShowing)
+        assertEquals(listOf("hidePrompt"), ui.calls)
+        assertFalse(engine.isTiming)
+
+        runFor(5 * MINUTE_MS)
+        assertFalse("prompt must not reappear outside watched apps", engine.promptShowing)
+
+        engine.onForeground(CHROME)
+        runFor(0)
+        assertTrue("session is still used up", engine.promptShowing)
+    }
+
+    @Test
+    fun checkpoint_keeps_used_time_if_service_restarts() {
+        engine.onForeground(FACEBOOK)
+        runFor(2 * MINUTE_MS)
+        engine.checkpoint()
+
+        ui = RecordingUi()
+        engine = newEngine()
+        engine.onForeground(FACEBOOK)
+        assertEquals(MINUTE_MS, ui.tickDelay)
+    }
+
+    @Test
+    fun checkpoint_does_not_change_when_prompt_appears() {
+        engine.onForeground(FACEBOOK)
+        runFor(MINUTE_MS)
+        engine.checkpoint()
+        runFor(MINUTE_MS)
+        engine.checkpoint()
+        runFor(MINUTE_MS - 1)
+        assertFalse(engine.promptShowing)
+        runFor(1)
+        assertTrue(engine.promptShowing)
     }
 
     @Test
@@ -235,6 +279,61 @@ class SessionEngineTest {
         clock.elapsed = 0
         clock.wall += 5 * MINUTE_MS
         assertEquals(25 * MINUTE_MS, engine.blockRemainingMs())
+    }
+
+    @Test
+    fun lock_opens_only_after_requested_delay() {
+        var lock = LockState().lock()
+        assertFalse(lock.isOpen(clock))
+        assertEquals(null, lock.unlockRemainingMs(clock))
+
+        lock = lock.requestUnlock(clock)
+        clock.advance(UNLOCK_DELAY_MS - 1)
+        assertFalse(lock.isOpen(clock))
+        clock.advance(1)
+        assertTrue(lock.isOpen(clock))
+        assertEquals(LockState(), lock.settle(clock))
+    }
+
+    @Test
+    fun cancelling_unlock_request_keeps_lock() {
+        var lock = LockState().lock().requestUnlock(clock)
+        clock.advance(UNLOCK_DELAY_MS / 2)
+        lock = lock.cancelUnlock()
+        clock.advance(UNLOCK_DELAY_MS)
+        assertFalse(lock.isOpen(clock))
+    }
+
+    @Test
+    fun repeated_unlock_request_does_not_restart_wait() {
+        var lock = LockState().lock().requestUnlock(clock)
+        clock.advance(UNLOCK_DELAY_MS - MINUTE_MS)
+        lock = lock.requestUnlock(clock)
+        clock.advance(MINUTE_MS)
+        assertTrue(lock.isOpen(clock))
+    }
+
+    @Test
+    fun changing_phone_time_does_not_speed_up_unlock() {
+        val lock = LockState().lock().requestUnlock(clock)
+        clock.wall += 2 * UNLOCK_DELAY_MS
+        assertFalse(lock.isOpen(clock))
+    }
+
+    @Test
+    fun stricter_direction_rules() {
+        assertTrue(isStricterOrSame(3, 2, Stricter.LOWER))
+        assertFalse(isStricterOrSame(3, 4, Stricter.LOWER))
+        assertTrue(isStricterOrSame(30, 35, Stricter.HIGHER))
+        assertFalse(isStricterOrSame(30, 25, Stricter.HIGHER))
+        assertTrue(isStricterOrSame(30, 30, Stricter.HIGHER))
+    }
+
+    @Test
+    fun formats_long_durations() {
+        assertEquals("24:00:00", formatDuration(UNLOCK_DELAY_MS))
+        assertEquals("1:00:00", formatDuration(60 * MINUTE_MS))
+        assertEquals("59:59", formatDuration(60 * MINUTE_MS - 1000))
     }
 
     @Test

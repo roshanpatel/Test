@@ -1,6 +1,7 @@
 package app.jolt
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
@@ -32,6 +33,8 @@ class MainActivity : Activity() {
     private lateinit var watchedSummary: TextView
     private lateinit var chooseApps: Button
     private lateinit var lockedNote: TextView
+    private lateinit var lockText: TextView
+    private lateinit var lockButton: Button
     private val steppers = mutableListOf<Stepper>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -56,7 +59,7 @@ class MainActivity : Activity() {
         column.addView(section("Setup"))
         accessibilityRow = SetupRow(
             title = "1. Accessibility service (required)",
-            detail = "Lets Jolt see which app is open, show the 10-second check, and block apps.",
+            detail = "Lets Jolt see which app is open, show the time check, and block apps.",
             action = "Open settings",
         ) { Setup.openAccessibilitySettings(this) }
         column.addView(accessibilityRow.view, block(top = 8))
@@ -89,13 +92,19 @@ class MainActivity : Activity() {
         column.addView(chooseApps, block(top = 8))
 
         column.addView(section("Timings"))
-        steppers += Stepper("Browse time before the check", 1, 1, 60, { prefs.sessionMinutes }, { prefs.sessionMinutes = it })
-        steppers += Stepper("Block length after PANIC", 5, 5, 240, { prefs.blockMinutes }, { prefs.blockMinutes = it })
-        steppers += Stepper("Wait before Continue unlocks", 10, 10, 300, { prefs.pauseSeconds }, { prefs.pauseSeconds = it }, unit = "s")
+        steppers += Stepper("Browse time before the check", 1, 1, 60, Stricter.LOWER, { prefs.sessionMinutes }, { prefs.sessionMinutes = it })
+        steppers += Stepper("Block length after PANIC", 5, 5, 240, Stricter.HIGHER, { prefs.blockMinutes }, { prefs.blockMinutes = it })
+        steppers += Stepper("Wait before Continue unlocks", 10, 10, 300, Stricter.HIGHER, { prefs.pauseSeconds }, { prefs.pauseSeconds = it }, unit = "s")
         steppers.forEach { column.addView(it.view, block(top = 8)) }
 
-        lockedNote = label("Settings are locked until the block ends.", 14f, Palette.PANIC)
+        lockedNote = label("", 14f, Palette.PANIC)
         column.addView(lockedNote, block(top = 16))
+
+        column.addView(section("Lock settings"))
+        lockText = label("", 15f, Palette.MUTED)
+        column.addView(lockText, block(top = 8))
+        lockButton = pillButton("", Palette.ACCENT) { onLockButton() }.apply { setTextColor(Palette.BACKGROUND) }
+        column.addView(lockButton, block(top = 8))
 
         setContentView(ScrollView(this).apply {
             fitsSystemWindows = true
@@ -120,6 +129,8 @@ class MainActivity : Activity() {
         val watched = prefs.watched
         val blockLeft = prefs.blockRemainingMs(clock)
         val blocked = blockLeft > 0
+        val lock = prefs.settledLock(clock)
+        val locked = !lock.isOpen(clock)
 
         when {
             blocked -> status("BLOCKED: ${formatMmSs(blockLeft)} left", Palette.PANIC)
@@ -127,7 +138,7 @@ class MainActivity : Activity() {
             watched.isEmpty() -> status("Running. Choose which apps to watch.", Palette.ACCENT)
             else -> status(
                 "Watching ${watched.size} ${if (watched.size == 1) "app" else "apps"}. " +
-                    "After ${prefs.sessionMinutes} min you'll get a 10-second check.",
+                    "After ${prefs.sessionMinutes} min you'll get a time check.",
                 Palette.GOOD,
             )
         }
@@ -138,8 +149,52 @@ class MainActivity : Activity() {
         watchedSummary.text = if (watched.isEmpty()) "No apps yet." else watched.map(::appName).sorted().joinToString(", ")
         chooseApps.isEnabled = !blocked
         chooseApps.alpha = if (blocked) 0.4f else 1f
-        steppers.forEach { it.update(enabled = !blocked) }
-        lockedNote.visibility = if (blocked) View.VISIBLE else View.GONE
+        steppers.forEach { it.update(blocked = blocked, locked = locked) }
+        lockedNote.text = when {
+            blocked -> "Settings are locked until the block ends."
+            locked -> "Settings are locked. You can still add apps or make timings stricter."
+            else -> ""
+        }
+        lockedNote.visibility = if (blocked || locked) View.VISIBLE else View.GONE
+
+        val unlockLeft = lock.unlockRemainingMs(clock)
+        when {
+            !locked -> {
+                lockText.text = "Stop yourself loosening the rules in a weak moment. " +
+                    "Unlocking later takes a 24-hour wait."
+                lockButton.text = "Lock settings"
+            }
+            unlockLeft == null -> {
+                lockText.text = "Locked. Uninstalling Jolt or switching it off is blocked too."
+                lockButton.text = "Request unlock (24-hour wait)"
+            }
+            else -> {
+                lockText.text = "Unlock requested. Settings open in ${formatDuration(unlockLeft)}."
+                lockButton.text = "Cancel unlock request"
+            }
+        }
+    }
+
+    private fun onLockButton() {
+        val lock = prefs.settledLock(clock)
+        when {
+            lock.isOpen(clock) -> AlertDialog.Builder(this)
+                .setTitle("Lock settings?")
+                .setMessage(
+                    "You'll still be able to add apps and make timings stricter, but not loosen them. " +
+                        "Uninstalling Jolt or switching it off will be blocked too.\n\n" +
+                        "To unlock, you'll request it and wait 24 hours.",
+                )
+                .setPositiveButton("Lock") { _, _ ->
+                    prefs.lock = lock.lock()
+                    refresh()
+                }
+                .setNegativeButton("Not now", null)
+                .show()
+            lock.unlockAt == null -> prefs.lock = lock.requestUnlock(clock)
+            else -> prefs.lock = lock.cancelUnlock()
+        }
+        refresh()
     }
 
     private fun status(text: String, color: Int) {
@@ -188,6 +243,7 @@ class MainActivity : Activity() {
         private val step: Int,
         private val min: Int,
         private val max: Int,
+        private val stricter: Stricter,
         private val get: () -> Int,
         private val set: (Int) -> Unit,
         private val unit: String = "min",
@@ -209,16 +265,25 @@ class MainActivity : Activity() {
             addView(plus)
         }
 
-        fun update(enabled: Boolean) {
+        private var locked = false
+
+        fun update(blocked: Boolean, locked: Boolean) {
+            this.locked = locked
             value.text = "${get()} $unit"
-            listOf(minus, plus).forEach {
-                it.isEnabled = enabled
-                it.alpha = if (enabled) 1f else 0.4f
-            }
+            enable(minus, !blocked && (!locked || stricter == Stricter.LOWER))
+            enable(plus, !blocked && (!locked || stricter == Stricter.HIGHER))
+        }
+
+        private fun enable(button: Button, enabled: Boolean) {
+            button.isEnabled = enabled
+            button.alpha = if (enabled) 1f else 0.4f
         }
 
         private fun change(delta: Int) {
-            set((get() + delta).coerceIn(min, max))
+            val old = get()
+            val new = (old + delta).coerceIn(min, max)
+            if (locked && !isStricterOrSame(old, new, stricter)) return
+            set(new)
             refresh()
         }
 

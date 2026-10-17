@@ -21,6 +21,14 @@ Leaving the watched apps pauses the session timer, so dipping in and out doesn't
 break of 30 minutes or more, or the end of a block, gives you a fresh session. The browse time,
 block length and countdown can be changed on the main screen when no block is running.
 
+## Lock settings
+
+Locking stops you loosening the rules in a weak moment. While locked you can still add apps,
+lengthen the block or the countdown, or shorten browse time, but nothing that loosens them.
+Uninstalling Jolt, force-stopping it, or turning off its accessibility service is blocked too
+(installing an update still works). To unlock, request it and wait 24 hours; you can cancel the
+request at any time.
+
 ## Install on your phone
 
 ### Without a computer

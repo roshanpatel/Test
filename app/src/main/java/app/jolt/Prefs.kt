@@ -33,6 +33,40 @@ class Prefs(context: Context) : StateStore {
 
     fun blockRemainingMs(clock: Clock): Long = load().blockRemainingMs(clock)
 
+    var lock: LockState
+        get() = LockState(
+            locked = sp.getBoolean("lock_locked", false),
+            unlockAt = if (sp.getBoolean("lock_requested", false)) {
+                Deadline(
+                    untilElapsed = sp.getLong("unlock_until_elapsed", 0),
+                    untilWall = sp.getLong("unlock_until_wall", 0),
+                    boot = sp.getInt("unlock_boot", EngineState.UNKNOWN_BOOT),
+                    lenMs = sp.getLong("unlock_len_ms", 0),
+                )
+            } else {
+                null
+            },
+        )
+        set(value) {
+            val at = value.unlockAt ?: Deadline.NONE
+            sp.edit()
+                .putBoolean("lock_locked", value.locked)
+                .putBoolean("lock_requested", value.unlockAt != null)
+                .putLong("unlock_until_elapsed", at.untilElapsed)
+                .putLong("unlock_until_wall", at.untilWall)
+                .putInt("unlock_boot", at.boot)
+                .putLong("unlock_len_ms", at.lenMs)
+                .apply()
+        }
+
+    /** Current lock state, with a completed unlock request applied. */
+    fun settledLock(clock: Clock): LockState {
+        val current = lock
+        val settled = current.settle(clock)
+        if (settled != current) lock = settled
+        return settled
+    }
+
     override fun load() = EngineState(
         usedMs = sp.getLong("used_ms", 0),
         lastActiveElapsed = sp.getLong("last_active_elapsed", 0),

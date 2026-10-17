@@ -102,8 +102,13 @@ class AppPickerActivity : Activity() {
     }
 
     private fun toggle(pkg: String) {
-        if (prefs.blockRemainingMs(AndroidClock(this)) > 0) {
+        val clock = AndroidClock(this)
+        if (prefs.blockRemainingMs(clock) > 0) {
             finish()
+            return
+        }
+        if (pkg in selected && !prefs.settledLock(clock).isOpen(clock)) {
+            Toast.makeText(this, "Settings are locked: you can add apps but not remove them.", Toast.LENGTH_SHORT).show()
             return
         }
         if (!selected.remove(pkg)) selected.add(pkg)
