@@ -15,6 +15,7 @@ class SessionEngineTest {
         override fun elapsed() = elapsed
         override fun wall() = wall
         override fun bootCount() = boot
+        override fun localDay() = wall / (24 * 60 * MINUTE_MS)
 
         fun advance(ms: Long) {
             elapsed += ms
@@ -22,11 +23,16 @@ class SessionEngineTest {
         }
     }
 
-    private class FakeStore : StateStore {
+    private class FakeStore : StateStore, StatsStore {
         var state = EngineState()
+        var stats = Stats()
         override fun load() = state
         override fun save(state: EngineState) {
             this.state = state
+        }
+        override fun loadStats() = stats
+        override fun saveStats(stats: Stats) {
+            this.stats = stats
         }
     }
 
@@ -36,7 +42,7 @@ class SessionEngineTest {
 
         override fun showPrompt() { calls += "showPrompt" }
         override fun hidePrompt() { calls += "hidePrompt" }
-        override fun showBlock() { calls += "showBlock" }
+        override fun showBlock(celebrate: Boolean) { calls += if (celebrate) "celebrate" else "showBlock" }
         override fun hideBlock() { calls += "hideBlock" }
         override fun goHome() { calls += "goHome" }
         override fun scheduleTick(delayMs: Long) { tickDelay = delayMs }
@@ -63,7 +69,7 @@ class SessionEngineTest {
         engine = newEngine()
     }
 
-    private fun newEngine() = SessionEngine({ config }, clock, store, ui)
+    private fun newEngine() = SessionEngine({ config }, clock, store, store, ui)
 
     /** Advance time and fire the tick if it is due, like the Android Handler would. */
     private fun runFor(ms: Long) {
@@ -207,7 +213,7 @@ class SessionEngineTest {
         engine.onPanic()
 
         assertTrue(engine.isBlocked)
-        assertEquals(listOf("hidePrompt", "goHome", "showBlock"), ui.calls)
+        assertEquals(listOf("hidePrompt", "goHome", "celebrate"), ui.calls)
         assertEquals(30 * MINUTE_MS, engine.blockRemainingMs())
 
         ui.calls.clear()
@@ -279,6 +285,126 @@ class SessionEngineTest {
         clock.elapsed = 0
         clock.wall += 5 * MINUTE_MS
         assertEquals(25 * MINUTE_MS, engine.blockRemainingMs())
+    }
+
+    @Test
+    fun reason_required_from_third_continue_in_a_row() {
+        engine.onForeground(FACEBOOK)
+        repeat(2) {
+            runFor(3 * MINUTE_MS)
+            assertFalse(engine.continueNeedsReason)
+            engine.onContinue()
+        }
+        runFor(3 * MINUTE_MS)
+        assertTrue(engine.continueNeedsReason)
+        engine.onContinue()
+        runFor(3 * MINUTE_MS)
+        assertTrue("still required after the third", engine.continueNeedsReason)
+    }
+
+    @Test
+    fun panic_resets_continue_count() {
+        engine.onForeground(FACEBOOK)
+        repeat(2) {
+            runFor(3 * MINUTE_MS)
+            engine.onContinue()
+        }
+        runFor(3 * MINUTE_MS)
+        engine.onPanic()
+        runFor(30 * MINUTE_MS)
+        engine.onForeground(FACEBOOK)
+        runFor(3 * MINUTE_MS)
+        assertFalse(engine.continueNeedsReason)
+    }
+
+    @Test
+    fun long_break_resets_continue_count() {
+        engine.onForeground(FACEBOOK)
+        repeat(2) {
+            runFor(3 * MINUTE_MS)
+            engine.onContinue()
+        }
+        engine.onForeground(MAPS)
+        runFor(30 * MINUTE_MS)
+        engine.onForeground(FACEBOOK)
+        runFor(3 * MINUTE_MS)
+        assertFalse(engine.continueNeedsReason)
+    }
+
+    @Test
+    fun stats_track_time_continues_and_panics() {
+        engine.onForeground(FACEBOOK)
+        runFor(3 * MINUTE_MS)
+        engine.onContinue()
+        runFor(3 * MINUTE_MS)
+        engine.onPanic()
+
+        val today = engine.today
+        assertEquals(6 * MINUTE_MS, today.watchedMs)
+        assertEquals(1, today.continues)
+        assertEquals(1, today.panics)
+        assertEquals(1, engine.stats.totalPanics)
+        assertEquals(30 * MINUTE_MS, engine.stats.totalBlockedMs)
+    }
+
+    @Test
+    fun streak_counts_good_days_and_skips_unfinished_today() {
+        val start = 100L
+        var stats = Stats().ensureStarted(start)
+        stats = stats.recordPanic(start, MINUTE_MS) // day 100: good
+        // day 101: unused, good
+        stats = stats.recordContinue(start + 2).recordPanic(start + 2, MINUTE_MS) // day 102: good
+        stats = stats.recordContinue(start + 3) // day 103 (today so far): not good yet
+        assertEquals(3, stats.streak(start + 3))
+
+        stats = stats.recordPanic(start + 3, MINUTE_MS)
+        assertEquals(4, stats.streak(start + 3))
+    }
+
+    @Test
+    fun bad_day_breaks_streak() {
+        var stats = Stats().ensureStarted(10)
+        stats = stats.recordContinue(11) // day 11: continued, never panicked
+        assertEquals(1, stats.streak(12)) // only day 12 (unused)
+        assertEquals(0, Stats().streak(5))
+    }
+
+    @Test
+    fun stats_survive_encoding() {
+        val stats = Stats().ensureStarted(5).addWatched(5, 1234).recordContinue(6).recordPanic(6, 30 * MINUTE_MS)
+        assertEquals(stats, Stats.decode(stats.encode()))
+        assertEquals(Stats(), Stats.decode("garbage"))
+        assertEquals(Stats(), Stats.decode(null))
+    }
+
+    @Test
+    fun old_days_are_dropped() {
+        val stats = Stats().addWatched(0, 1).addWatched(KEEP_DAYS.toLong() + 5, 1)
+        assertEquals(setOf(KEEP_DAYS.toLong() + 5), stats.days.keys)
+    }
+
+    @Test
+    fun milestones() {
+        assertEquals("Your first PANIC. The first one is the hardest.", panicMilestone(1))
+        assertEquals("Milestone: 10 PANICs!", panicMilestone(10))
+        assertEquals(null, panicMilestone(11))
+        assertEquals(25, nextPanicMilestone(10))
+        assertEquals("Milestone: a 7-day streak!", streakMilestone(7))
+        assertEquals(null, streakMilestone(8))
+    }
+
+    @Test
+    fun reason_matching_is_forgiving_but_exact_in_words() {
+        val reason = "I want to be present with my kids."
+        assertTrue(matchesReason("i want to be  present with my kids", reason))
+        assertFalse(matchesReason("i want to be present", reason))
+        assertFalse(matchesReason("", ""))
+    }
+
+    @Test
+    fun formats_hours_and_minutes() {
+        assertEquals("45 min", formatHoursMinutes(45 * MINUTE_MS))
+        assertEquals("18 h 30 min", formatHoursMinutes((18 * 60 + 30) * MINUTE_MS))
     }
 
     @Test

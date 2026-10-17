@@ -32,6 +32,8 @@ data class EngineState(
     val blockUntilWall: Long = 0,
     val blockBoot: Int = UNKNOWN_BOOT,
     val blockLenMs: Long = 0,
+    /** Continue presses since the last PANIC or fresh session. */
+    val continuesInARow: Int = 0,
 ) {
     val block get() = Deadline(blockUntilElapsed, blockUntilWall, blockBoot, blockLenMs)
 
@@ -48,6 +50,8 @@ interface Clock {
     fun wall(): Long
     /** Number of boots so far, or [EngineState.UNKNOWN_BOOT]. */
     fun bootCount(): Int
+    /** Today's date in the phone's time zone, as days since 1970-01-01. */
+    fun localDay(): Long
 }
 
 interface StateStore {
@@ -58,7 +62,8 @@ interface StateStore {
 interface EngineUi {
     fun showPrompt()
     fun hidePrompt()
-    fun showBlock()
+    /** [celebrate] is true right after PANIC, false when bouncing off a blocked app. */
+    fun showBlock(celebrate: Boolean)
     fun hideBlock()
     fun goHome()
     fun scheduleTick(delayMs: Long)
@@ -75,9 +80,11 @@ class SessionEngine(
     private val config: () -> Config,
     private val clock: Clock,
     private val store: StateStore,
+    private val statsStore: StatsStore,
     private val ui: EngineUi,
 ) {
     private var state = store.load()
+    private var statsState = statsStore.loadStats()
     private var currentPkg: String? = null
     private var timingSince: Long? = null
 
@@ -91,8 +98,16 @@ class SessionEngine(
 
     fun blockRemainingMs(): Long = state.blockRemainingMs(clock)
 
+    val stats: Stats get() = statsState
+
+    val today: DayStats get() = statsState.day(clock.localDay())
+
+    /** Whether the next Continue needs the user's reason typed out. */
+    val continueNeedsReason: Boolean get() = state.continuesInARow + 1 >= TYPE_REASON_ON_CONTINUE
+
     /** Call once when the service starts. */
     fun start() {
+        updateStats { it }
         if (isBlocked) ui.scheduleTick(blockRemainingMs())
     }
 
@@ -112,7 +127,7 @@ class SessionEngine(
         if (isBlocked) {
             if (watched) {
                 ui.goHome()
-                ui.showBlock()
+                ui.showBlock(celebrate = false)
             }
             return
         }
@@ -140,17 +155,16 @@ class SessionEngine(
         }
     }
 
-    /** Saves time used so far, so it isn't lost if the service is killed mid-session. */
+    /**
+     * Saves time used so far, so it isn't lost if the service is killed mid-session.
+     * Cheap to call often; it only writes every [CHECKPOINT_MS].
+     */
     fun checkpoint() {
         val since = timingSince ?: return
         val now = clock.elapsed()
+        if (now - since < CHECKPOINT_MS) return
         timingSince = now
-        state = state.copy(
-            usedMs = state.usedMs + (now - since),
-            lastActiveElapsed = now,
-            lastActiveBoot = clock.bootCount(),
-        )
-        store.save(state)
+        foldUsed(now - since, now)
     }
 
     fun onContinue() {
@@ -161,8 +175,10 @@ class SessionEngine(
             usedMs = 0,
             lastActiveElapsed = clock.elapsed(),
             lastActiveBoot = clock.bootCount(),
+            continuesInARow = state.continuesInARow + 1,
         )
         store.save(state)
+        updateStats { it.recordContinue(clock.localDay()) }
         onForeground(currentPkg)
     }
 
@@ -178,10 +194,12 @@ class SessionEngine(
             blockUntilWall = block.untilWall,
             blockBoot = block.boot,
             blockLenMs = block.lenMs,
+            continuesInARow = 0,
         )
         store.save(state)
+        updateStats { it.recordPanic(clock.localDay(), block.lenMs) }
         ui.goHome()
-        ui.showBlock()
+        ui.showBlock(celebrate = true)
         ui.scheduleTick(block.lenMs)
     }
 
@@ -197,7 +215,7 @@ class SessionEngine(
         val now = clock.elapsed()
         val sameBoot = state.lastActiveBoot == clock.bootCount()
         val idle = if (sameBoot) now - state.lastActiveElapsed else Long.MAX_VALUE
-        if (idle >= config().resetMs) state = state.copy(usedMs = 0)
+        if (idle >= config().resetMs) state = state.copy(usedMs = 0, continuesInARow = 0)
         timingSince = now
         ui.scheduleTick((config().sessionMs - state.usedMs).coerceAtLeast(0))
     }
@@ -207,12 +225,26 @@ class SessionEngine(
         val now = clock.elapsed()
         timingSince = null
         ui.cancelTick()
+        foldUsed(now - since, now)
+    }
+
+    private fun foldUsed(ms: Long, now: Long) {
         state = state.copy(
-            usedMs = state.usedMs + (now - since),
+            usedMs = state.usedMs + ms,
             lastActiveElapsed = now,
             lastActiveBoot = clock.bootCount(),
         )
         store.save(state)
+        updateStats { it.addWatched(clock.localDay(), ms) }
+    }
+
+    private fun updateStats(change: (Stats) -> Stats) {
+        statsState = change(statsState.ensureStarted(clock.localDay()))
+        statsStore.saveStats(statsState)
+    }
+
+    private companion object {
+        const val CHECKPOINT_MS = 15_000L
     }
 }
 

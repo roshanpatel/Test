@@ -3,8 +3,9 @@ package app.jolt
 import android.content.Context
 import android.os.SystemClock
 import android.provider.Settings
+import java.time.LocalDate
 
-class Prefs(context: Context) : StateStore {
+class Prefs(context: Context) : StateStore, StatsStore {
     private val sp = context.applicationContext.getSharedPreferences("jolt", Context.MODE_PRIVATE)
 
     var watched: Set<String>
@@ -18,6 +19,19 @@ class Prefs(context: Context) : StateStore {
     var blockMinutes: Int
         get() = sp.getInt(KEY_BLOCK_MIN, 30)
         set(value) = sp.edit().putInt(KEY_BLOCK_MIN, value).apply()
+
+    var breathing: Boolean
+        get() = sp.getBoolean(KEY_BREATHING, true)
+        set(value) = sp.edit().putBoolean(KEY_BREATHING, value).apply()
+
+    /** The user's own reason for cutting back, shown on the time check. */
+    var reason: String
+        get() = sp.getString(KEY_REASON, null).orEmpty()
+        set(value) = sp.edit().putString(KEY_REASON, value.trim()).apply()
+
+    override fun loadStats(): Stats = Stats.decode(sp.getString(KEY_STATS, null))
+
+    override fun saveStats(stats: Stats) = sp.edit().putString(KEY_STATS, stats.encode()).apply()
 
     /** How long the pop-up keeps Continue locked. */
     var pauseSeconds: Int
@@ -75,6 +89,7 @@ class Prefs(context: Context) : StateStore {
         blockUntilWall = sp.getLong("block_until_wall", 0),
         blockBoot = sp.getInt("block_boot", EngineState.UNKNOWN_BOOT),
         blockLenMs = sp.getLong("block_len_ms", 0),
+        continuesInARow = sp.getInt("continues_in_a_row", 0),
     )
 
     override fun save(state: EngineState) {
@@ -86,6 +101,7 @@ class Prefs(context: Context) : StateStore {
             .putLong("block_until_wall", state.blockUntilWall)
             .putInt("block_boot", state.blockBoot)
             .putLong("block_len_ms", state.blockLenMs)
+            .putInt("continues_in_a_row", state.continuesInARow)
             .apply()
     }
 
@@ -94,6 +110,9 @@ class Prefs(context: Context) : StateStore {
         const val KEY_SESSION_MIN = "session_min"
         const val KEY_BLOCK_MIN = "block_min"
         const val KEY_PAUSE_SEC = "pause_sec"
+        const val KEY_BREATHING = "breathing"
+        const val KEY_REASON = "reason"
+        const val KEY_STATS = "stats"
     }
 }
 
@@ -103,4 +122,5 @@ class AndroidClock(context: Context) : Clock {
     override fun elapsed() = SystemClock.elapsedRealtime()
     override fun wall() = System.currentTimeMillis()
     override fun bootCount() = Settings.Global.getInt(resolver, Settings.Global.BOOT_COUNT, EngineState.UNKNOWN_BOOT)
+    override fun localDay() = LocalDate.now().toEpochDay()
 }

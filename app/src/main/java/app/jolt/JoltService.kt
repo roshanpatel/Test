@@ -51,11 +51,16 @@ class JoltService : AccessibilityService(), EngineUi {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
                 Intent.ACTION_SCREEN_OFF -> engine.onForeground(null)
-                Intent.ACTION_SCREEN_ON ->
+                Intent.ACTION_SCREEN_ON -> {
                     if (!(getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager).isKeyguardLocked) {
                         engine.onForeground(lastActivityPkg)
                     }
-                Intent.ACTION_USER_PRESENT -> engine.onForeground(lastActivityPkg)
+                    ensureWatchdog()
+                }
+                Intent.ACTION_USER_PRESENT -> {
+                    engine.onForeground(lastActivityPkg)
+                    ensureWatchdog()
+                }
             }
         }
     }
@@ -65,7 +70,7 @@ class JoltService : AccessibilityService(), EngineUi {
         clock = AndroidClock(this)
         overlays = Overlays(this)
         appLabel = applicationInfo.loadLabel(packageManager).toString()
-        engine = SessionEngine(prefs::config, clock, prefs, this)
+        engine = SessionEngine(prefs::config, clock, prefs, prefs, this)
 
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
@@ -145,12 +150,15 @@ class JoltService : AccessibilityService(), EngineUi {
         if (pkg != lastActivityPkg) onAppOpened(pkg)
     }
 
+    /** Runs only while the screen is on; the screen-on broadcast restarts it. */
     private fun ensureWatchdog() {
-        if (watchdogRunning) return
+        if (watchdogRunning || !isScreenOn()) return
         if (!engine.isTiming && !engine.promptShowing && !guardActive()) return
         watchdogRunning = true
         handler.postDelayed(watchdog, WATCHDOG_INTERVAL_MS)
     }
+
+    private fun isScreenOn() = (getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive
 
     private fun activeWindowPackage(): String? = rootInActiveWindow?.packageName?.toString()
 
@@ -158,7 +166,7 @@ class JoltService : AccessibilityService(), EngineUi {
 
     private fun onAppOpened(pkg: String) {
         lastActivityPkg = pkg
-        if ((getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive) engine.onForeground(pkg)
+        if (isScreenOn()) engine.onForeground(pkg)
         ensureWatchdog()
     }
 
@@ -196,7 +204,7 @@ class JoltService : AccessibilityService(), EngineUi {
     private fun kickOut() {
         performGlobalAction(GLOBAL_ACTION_HOME)
         if (engine.isBlocked) {
-            showBlock()
+            showBlock(celebrate = false)
         } else {
             val now = SystemClock.elapsedRealtime()
             if (now - lastLockedNotice > LOCKED_NOTICE_INTERVAL_MS) {
@@ -211,8 +219,14 @@ class JoltService : AccessibilityService(), EngineUi {
 
     override fun showPrompt() {
         overlays.showPrompt(
-            sessionMinutes = prefs.sessionMinutes,
-            pauseSeconds = prefs.pauseSeconds,
+            PromptInfo(
+                sessionMinutes = prefs.sessionMinutes,
+                pauseSeconds = prefs.pauseSeconds,
+                breathing = prefs.breathing,
+                reason = prefs.reason,
+                todayWatchedMs = engine.today.watchedMs,
+                needsReason = engine.continueNeedsReason,
+            ),
             onContinue = { engine.onContinue() },
             onPanic = { engine.onPanic() },
         )
@@ -221,12 +235,29 @@ class JoltService : AccessibilityService(), EngineUi {
 
     override fun hidePrompt() = overlays.hidePrompt()
 
-    override fun showBlock() {
+    override fun showBlock(celebrate: Boolean) {
         overlays.showBlock(
             remainingMs = { engine.blockRemainingMs() },
+            celebration = if (celebrate) celebration() else null,
             onDismiss = ::goHome,
         )
         ensureWatchdog()
+    }
+
+    private fun celebration(): Celebration {
+        val stats = engine.stats
+        val streak = stats.streak(clock.localDay())
+        // Only celebrate a streak milestone on the day's first PANIC, when it was reached.
+        val firstToday = engine.today.panics == 1
+        return Celebration(
+            panicNumber = stats.totalPanics,
+            praise = PANIC_PRAISE.random(),
+            milestones = listOfNotNull(
+                panicMilestone(stats.totalPanics),
+                streakMilestone(streak).takeIf { firstToday },
+            ),
+            streakDays = streak,
+        )
     }
 
     override fun hideBlock() = overlays.hideBlock()

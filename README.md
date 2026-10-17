@@ -9,6 +9,14 @@ default, up to 5 minutes):
 - **Continue browsing** is locked until the countdown ends, then gives you another full
   session. The check stays on screen until you choose.
 
+The check shows your own reason (set it on the main screen), today's time in watched apps, and
+an optional breathing exercise. From the 3rd Continue in a row, continuing also needs your
+reason typed out, under the question "Is what you're doing important?". The count resets after a
+PANIC or a 30-minute break.
+
+Every PANIC is celebrated, and the main screen tracks your progress: today's totals, a streak of
+good days (a day where you pressed PANIC, or never chose Continue), and milestones.
+
 A block can't be cancelled. While it runs:
 
 - opening a watched app sends you to the home screen and shows the time left;

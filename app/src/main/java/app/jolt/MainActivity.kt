@@ -11,9 +11,12 @@ import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.Button
+import android.widget.EditText
+import android.widget.Switch
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 
 class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
@@ -34,6 +37,10 @@ class MainActivity : Activity() {
     private lateinit var chooseApps: Button
     private lateinit var lockedNote: TextView
     private lateinit var lockText: TextView
+    private lateinit var progress: TextView
+    private lateinit var breathingSwitch: Switch
+    private lateinit var reasonInput: EditText
+    private lateinit var saveReason: Button
     private lateinit var lockButton: Button
     private val steppers = mutableListOf<Stepper>()
 
@@ -55,6 +62,13 @@ class MainActivity : Activity() {
             setPadding(dp(16), dp(16), dp(16), dp(16))
         }
         column.addView(status, block(top = 20))
+
+        column.addView(section("Your progress"))
+        progress = label("", 15f).apply {
+            background = rounded(Palette.CARD)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+        }
+        column.addView(progress, block(top = 8))
 
         column.addView(section("Setup"))
         accessibilityRow = SetupRow(
@@ -96,6 +110,49 @@ class MainActivity : Activity() {
         steppers += Stepper("Block length after PANIC", 5, 5, 240, Stricter.HIGHER, { prefs.blockMinutes }, { prefs.blockMinutes = it })
         steppers += Stepper("Wait before Continue unlocks", 10, 10, 300, Stricter.HIGHER, { prefs.pauseSeconds }, { prefs.pauseSeconds = it }, unit = "s")
         steppers.forEach { column.addView(it.view, block(top = 8)) }
+
+        column.addView(section("Time check"))
+        breathingSwitch = Switch(this).apply {
+            text = "Breathing exercise during the countdown"
+            textSize = 15f
+            setTextColor(Palette.TEXT)
+            isChecked = prefs.breathing
+            setOnCheckedChangeListener { button, checked ->
+                if (checked == prefs.breathing) return@setOnCheckedChangeListener
+                val lock = prefs.settledLock(clock)
+                if (!checked && (isBlocked() || !lock.isOpen(clock))) {
+                    button.isChecked = true // turning it off loosens the rules
+                } else {
+                    prefs.breathing = checked
+                }
+            }
+        }
+        column.addView(breathingSwitch, block(top = 8))
+        column.addView(
+            label(
+                "Your reason. It's shown on every time check, and from the $TYPE_REASON_ON_CONTINUE" +
+                    "rd Continue in a row you'll need to type it to keep going.",
+                14f,
+                Palette.MUTED,
+            ),
+            block(top = 16),
+        )
+        reasonInput = EditText(this).apply {
+            hint = "e.g. I want to be present with my family"
+            setText(prefs.reason)
+            setTextColor(Palette.TEXT)
+            setHintTextColor(Palette.MUTED)
+            background = rounded(Palette.CARD, 12)
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+        }
+        column.addView(reasonInput, block(top = 8))
+        saveReason = pillButton("Save reason", Palette.NEUTRAL) {
+            prefs.reason = reasonInput.text.toString()
+            reasonInput.setText(prefs.reason)
+            reasonInput.clearFocus()
+            Toast.makeText(this, "Saved", Toast.LENGTH_SHORT).show()
+        }
+        column.addView(saveReason, block(top = 8))
 
         lockedNote = label("", 14f, Palette.PANIC)
         column.addView(lockedNote, block(top = 16))
@@ -142,6 +199,26 @@ class MainActivity : Activity() {
                 Palette.GOOD,
             )
         }
+
+        val stats = prefs.loadStats()
+        val today = stats.day(clock.localDay())
+        val streak = stats.streak(clock.localDay())
+        val next = nextPanicMilestone(stats.totalPanics)
+        progress.text = buildString {
+            append("Today: ${formatHoursMinutes(today.watchedMs)} in watched apps · ")
+            append("${today.panics} PANIC${if (today.panics == 1) "" else "s"}")
+            append("\n🔥 Streak: $streak good ${if (streak == 1) "day" else "days"}")
+            append("\n🏆 All time: ${stats.totalPanics} PANIC${if (stats.totalPanics == 1) "" else "s"}, ")
+            append("${formatHoursMinutes(stats.totalBlockedMs)} blocked")
+            if (next != null) append("\nNext milestone: $next PANICs")
+            append("\n\nA good day is one where you pressed PANIC, or never chose Continue.")
+        }
+
+        if (breathingSwitch.isChecked != prefs.breathing) breathingSwitch.isChecked = prefs.breathing
+        val canEditReason = !blocked && !locked
+        reasonInput.isEnabled = canEditReason
+        saveReason.isEnabled = canEditReason
+        saveReason.alpha = if (canEditReason) 1f else 0.4f
 
         accessibilityRow.update(serviceOn)
         batteryRow.update(batteryOk)
@@ -196,6 +273,8 @@ class MainActivity : Activity() {
         }
         refresh()
     }
+
+    private fun isBlocked() = prefs.blockRemainingMs(clock) > 0
 
     private fun status(text: String, color: Int) {
         status.text = text
