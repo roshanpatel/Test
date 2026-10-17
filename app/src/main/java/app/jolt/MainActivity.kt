@@ -2,6 +2,7 @@ package app.jolt
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
@@ -41,6 +42,12 @@ class MainActivity : Activity() {
     private lateinit var breathingSwitch: Switch
     private lateinit var reasonInput: EditText
     private lateinit var saveReason: Button
+    private lateinit var clips: Clips
+    private lateinit var clipsSummary: TextView
+    private lateinit var clipsList: LinearLayout
+    private lateinit var addClips: Button
+    private var clipsShownFor: List<String>? = null
+    private var clipsLockedShown: Boolean? = null
     private lateinit var lockButton: Button
     private val steppers = mutableListOf<Stepper>()
 
@@ -48,6 +55,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
         clock = AndroidClock(this)
+        clips = Clips(this)
 
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -154,6 +162,14 @@ class MainActivity : Activity() {
         }
         column.addView(saveReason, block(top = 8))
 
+        column.addView(section("Inspiration after PANIC"))
+        clipsSummary = label("", 14f, Palette.MUTED)
+        column.addView(clipsSummary, block(top = 8))
+        clipsList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        column.addView(clipsList, block(top = 4))
+        addClips = pillButton("Add GIFs, photos or videos", Palette.NEUTRAL) { pickClips() }
+        column.addView(addClips, block(top = 8))
+
         lockedNote = label("", 14f, Palette.PANIC)
         column.addView(lockedNote, block(top = 16))
 
@@ -220,6 +236,8 @@ class MainActivity : Activity() {
         saveReason.isEnabled = canEditReason
         saveReason.alpha = if (canEditReason) 1f else 0.4f
 
+        updateClips(blocked = blocked, locked = locked)
+
         accessibilityRow.update(serviceOn)
         batteryRow.update(batteryOk)
 
@@ -275,6 +293,82 @@ class MainActivity : Activity() {
     }
 
     private fun isBlocked() = prefs.blockRemainingMs(clock) > 0
+
+    private fun pickClips() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/*", "video/*"))
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        }
+        try {
+            startActivityForResult(intent, REQUEST_CLIPS)
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(this, "No file picker found on this phone.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_CLIPS || resultCode != RESULT_OK || data == null) return
+        val uris = buildList {
+            data.data?.let(::add)
+            data.clipData?.let { clip -> for (i in 0 until clip.itemCount) add(clip.getItemAt(i).uri) }
+        }.distinct()
+        Thread {
+            val added = uris.count(clips::add)
+            runOnUiThread {
+                val failed = uris.size - added
+                val message = when {
+                    failed == 0 -> "Added $added"
+                    added == 0 -> "Couldn't add that. Clips must be images or videos under 50 MB."
+                    else -> "Added $added. $failed couldn't be added (images or videos under 50 MB only)."
+                }
+                Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+                refresh()
+            }
+        }.start()
+    }
+
+    /** Rebuilds the clip list only when it or the lock state changes. */
+    private fun updateClips(blocked: Boolean, locked: Boolean) {
+        val files = clips.list()
+        addClips.isEnabled = !blocked
+        addClips.alpha = if (blocked) 0.4f else 1f
+        val canRemove = !blocked && !locked
+        val names = files.map { it.name }
+        if (names == clipsShownFor && canRemove == clipsLockedShown) return
+        clipsShownFor = names
+        clipsLockedShown = canRemove
+
+        clipsSummary.text = if (files.isEmpty()) {
+            "Add your own clips to play after each PANIC: your kids, a place you love, a goal. " +
+                "Until then, a built-in animation plays."
+        } else {
+            "One of your ${files.size} ${if (files.size == 1) "clip" else "clips"} plays after each PANIC, muted and looping."
+        }
+        clipsList.removeAllViews()
+        files.forEachIndexed { i, file ->
+            val kind = when (file.extension) {
+                Clips.GIF -> "GIF"
+                Clips.VIDEO -> "Video"
+                else -> "Photo"
+            }
+            val row = LinearLayout(this).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                background = rounded(Palette.CARD)
+                setPadding(dp(16), dp(4), dp(8), dp(4))
+                addView(label("${i + 1}. $kind", 15f), LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+                if (canRemove) {
+                    addView(pillButton("Remove", Palette.NEUTRAL) {
+                        clips.remove(file)
+                        refresh()
+                    })
+                }
+            }
+            clipsList.addView(row, block(top = 6))
+        }
+    }
 
     private fun status(text: String, color: Int) {
         status.text = text
@@ -373,5 +467,9 @@ class MainActivity : Activity() {
                 setPadding(0, 0, 0, 0)
                 textSize = 20f
             }
+    }
+
+    private companion object {
+        const val REQUEST_CLIPS = 1
     }
 }

@@ -14,8 +14,12 @@ an optional breathing exercise. From the 3rd Continue in a row, continuing also 
 reason typed out, under the question "Is what you're doing important?". The count resets after a
 PANIC or a 30-minute break.
 
-Every PANIC is celebrated, and the main screen tracks your progress: today's totals, a streak of
-good days (a day where you pressed PANIC, or never chose Continue), and milestones.
+Every PANIC is celebrated with an inspiration clip: one of your own GIFs, photos or videos (added
+on the main screen, muted and looping), or, until you add some, one of four built-in animations.
+While settings are locked, clips can be added but not removed.
+
+The main screen also tracks your progress: today's totals, a streak of good days (a day where you
+pressed PANIC, or never chose Continue), and milestones.
 
 A block can't be cancelled. While it runs:
 

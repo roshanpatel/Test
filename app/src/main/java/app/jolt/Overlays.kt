@@ -6,7 +6,13 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
 import android.graphics.Typeface
+import android.graphics.drawable.AnimatedImageDrawable
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -25,8 +31,12 @@ import android.view.animation.AccelerateDecelerateInterpolator
 import android.view.animation.LinearInterpolator
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.VideoView
+import java.io.File
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.random.Random
 
@@ -64,6 +74,7 @@ class Overlays(private val service: AccessibilityService) {
     private var breathingView: BreathingView? = null
     private var blockView: View? = null
     private var blockTicker: Runnable? = null
+    private var video: VideoView? = null
 
     /**
      * PANIC works straight away. Continue stays locked until the countdown ends, so carrying
@@ -224,6 +235,7 @@ class Overlays(private val service: AccessibilityService) {
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(ctx.dp(32), 0, ctx.dp(32), 0)
             if (celebration != null) {
+                addView(inspiration(ctx), LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { bottomMargin = ctx.dp(16) })
                 addView(ctx.label("🎉 Well done!", 34f, Palette.GOOD, bold = true).apply { gravity = Gravity.CENTER })
                 addView(
                     ctx.label("That's PANIC #${celebration.panicNumber}. ${celebration.praise}", 18f).apply { gravity = Gravity.CENTER },
@@ -258,7 +270,18 @@ class Overlays(private val service: AccessibilityService) {
         }
 
         val root = scrim(ctx, Palette.BACKGROUND).apply {
-            addView(column, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.CENTER))
+            addView(
+                ScrollView(ctx).apply {
+                    isFillViewport = true
+                    addView(
+                        FrameLayout(ctx).apply {
+                            setPadding(0, ctx.dp(24), 0, ctx.dp(24))
+                            addView(column, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.CENTER))
+                        },
+                    )
+                },
+                FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT),
+            )
             if (celebration != null) {
                 addView(ConfettiView(ctx), FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             }
@@ -285,8 +308,72 @@ class Overlays(private val service: AccessibilityService) {
     fun hideBlock() {
         blockTicker?.let(handler::removeCallbacks)
         blockTicker = null
+        video?.stopPlayback()
+        video = null
         blockView?.let(::remove)
         blockView = null
+    }
+
+    /** One of the user's own clips if they've added any, otherwise a built-in animation. */
+    private fun inspiration(ctx: Context): View {
+        Clips(ctx).random()?.let { clip -> clipView(ctx, clip)?.let { return it } }
+        val scene = Scene.entries.random()
+        return LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(SceneView(ctx, scene), LinearLayout.LayoutParams(MATCH_PARENT, ctx.dp(MEDIA_HEIGHT_DP)))
+            addView(ctx.label(scene.caption, 16f, Palette.MUTED).apply { gravity = Gravity.CENTER }, spaced(ctx, top = 8))
+        }
+    }
+
+    private fun clipView(ctx: Context, file: File): View? = try {
+        val media: View = if (Clips.isVideo(file)) {
+            VideoView(ctx).apply {
+                setVideoPath(file.path)
+                setOnPreparedListener {
+                    it.isLooping = true
+                    it.setVolume(0f, 0f)
+                    start()
+                }
+                setOnErrorListener { _, _, _ ->
+                    visibility = View.GONE
+                    true
+                }
+                video = this
+            }
+        } else {
+            ImageView(ctx).apply {
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                setImageDrawable(decodeImage(ctx, file))
+            }
+        }
+        FrameLayout(ctx).apply {
+            addView(media, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT, Gravity.CENTER))
+            layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, ctx.dp(MEDIA_HEIGHT_DP))
+            minimumHeight = ctx.dp(MEDIA_HEIGHT_DP)
+        }
+    } catch (e: Exception) {
+        null
+    }
+
+    /** Decodes a photo or GIF, animating GIFs where the phone supports it. */
+    private fun decodeImage(ctx: Context, file: File): Drawable {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val drawable = ImageDecoder.decodeDrawable(ImageDecoder.createSource(file)) { decoder, info, _ ->
+                val longest = max(info.size.width, info.size.height)
+                if (longest > MAX_IMAGE_PX) decoder.setTargetSampleSize(longest / MAX_IMAGE_PX + 1)
+            }
+            if (drawable is AnimatedImageDrawable) {
+                drawable.repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
+                drawable.start()
+            }
+            return drawable
+        }
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.path, bounds)
+        val longest = max(bounds.outWidth, bounds.outHeight)
+        val options = BitmapFactory.Options().apply { inSampleSize = (longest / MAX_IMAGE_PX + 1).coerceAtLeast(1) }
+        val bitmap = BitmapFactory.decodeFile(file.path, options) ?: error("Unreadable image")
+        return BitmapDrawable(ctx.resources, bitmap)
     }
 
     fun hideAll() {
@@ -443,6 +530,8 @@ class Overlays(private val service: AccessibilityService) {
 
     private companion object {
         const val DEFAULT_REASON = "I choose to keep scrolling"
+        const val MEDIA_HEIGHT_DP = 220
+        const val MAX_IMAGE_PX = 1080
 
         val SUGGESTIONS = listOf(
             "Put the phone down.",
