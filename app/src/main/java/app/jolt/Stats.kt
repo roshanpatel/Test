@@ -39,17 +39,42 @@ data class Stats(
     /**
      * Good days in a row, ending today. Today counts once it's good; until then it doesn't
      * break the streak, since there's still time to press PANIC.
+     *
+     * One bad day per [FREEZE_EVERY_DAYS] is frozen: it doesn't add to the streak, but it
+     * doesn't break it either. One slip shouldn't wipe out weeks of effort.
      */
-    fun streak(today: Long): Int {
-        if (firstDay == NO_DAY) return 0
+    fun streakInfo(today: Long): Streak {
+        if (firstDay == NO_DAY) return Streak(0, 0, true)
         var d = if (day(today).good) today else today - 1
         var count = 0
-        while (d >= firstDay && day(d).good) {
-            count++
+        var frozen = 0
+        var lastFrozen: Long? = null
+        // A bad day is only forgiven if there's a good run before it to protect.
+        var pending: Long? = null
+        while (d >= firstDay) {
+            if (day(d).good) {
+                if (pending != null) {
+                    frozen++
+                    lastFrozen = pending
+                    pending = null
+                }
+                count++
+            } else {
+                val previous = pending ?: lastFrozen
+                if (pending != null || (previous != null && previous - d < FREEZE_EVERY_DAYS)) break
+                pending = d
+            }
             d--
         }
-        return count
+        val ready = lastFrozen == null || today - lastFrozen >= FREEZE_EVERY_DAYS
+        return Streak(count, frozen, ready)
     }
+
+    fun streak(today: Long): Int = streakInfo(today).days
+
+    /** Yesterday was a bad day: kept going, never pressed PANIC. */
+    fun slippedYesterday(today: Long): Boolean =
+        firstDay != NO_DAY && today - 1 >= firstDay && !day(today - 1).good
 
     private fun update(day: Long, change: (DayStats) -> DayStats): Stats {
         val first = if (firstDay == NO_DAY) day else minOf(firstDay, day)
@@ -82,6 +107,17 @@ data class Stats(
     }
 }
 
+data class Streak(
+    val days: Int,
+    /** Bad days forgiven inside the current streak. */
+    val freezesUsed: Int,
+    /** Whether the next bad day would be forgiven. */
+    val freezeReady: Boolean,
+)
+
+/** A streak freeze becomes available again this many days after the last one. */
+const val FREEZE_EVERY_DAYS = 7
+
 interface StatsStore {
     fun loadStats(): Stats
     fun saveStats(stats: Stats)
@@ -100,6 +136,52 @@ fun streakMilestone(days: Int): String? =
     if (days in STREAK_MILESTONES) "Milestone: a $days-day streak!" else null
 
 fun nextPanicMilestone(count: Int): Int? = PANIC_MILESTONES.firstOrNull { it > count }
+
+/** How far [count] is between the last milestone reached and the next one, 0..1. */
+fun milestoneProgress(count: Int): Float {
+    val next = nextPanicMilestone(count) ?: return 1f
+    val previous = PANIC_MILESTONES.lastOrNull { it <= count } ?: 0
+    return (count - previous).toFloat() / (next - previous)
+}
+
+private class Equivalent(val one: String, val many: String, val minutes: Int)
+
+private val EQUIVALENTS = listOf(
+    Equivalent("a book", "books", 360),
+    Equivalent("a film", "films", 120),
+    Equivalent("a gym session", "gym sessions", 60),
+    Equivalent("a TV episode", "TV episodes", 45),
+    Equivalent("a walk round the block", "walks round the block", 15),
+)
+
+/** Time back put in everyday terms: "about 3 films". Null under 15 minutes. */
+fun timeBackInRealTerms(ms: Long): String? {
+    val minutes = ms / MINUTE_MS
+    val unit = EQUIVALENTS.firstOrNull { minutes >= it.minutes } ?: return null
+    val count = minutes / unit.minutes
+    return if (count == 1L) "about ${unit.one}" else "about $count ${unit.many}"
+}
+
+/** Shown the day after a slip. Picked by date, so it stays the same all day. */
+val SLIP_KINDNESS = listOf(
+    "Yesterday was hard. That's human, not failure. Today is a fresh start.",
+    "One rough day doesn't undo your progress. Be kind to yourself, and go again.",
+    "Everyone slips. What matters is that you're still here, still trying.",
+    "Progress isn't a straight line. You're doing better than you think.",
+    "You're not starting from zero. You're starting from experience.",
+)
+
+fun slipKindness(today: Long): String = SLIP_KINDNESS[Math.floorMod(today, SLIP_KINDNESS.size.toLong()).toInt()]
+
+/** For a PANIC that came after one or more Continues. */
+val COMEBACK_PRAISE = listOf(
+    "Stopping late is still stopping. Well done.",
+    "You kept going for a while, and still chose to stop. That counts.",
+    "It's never too late to stop. You just proved it.",
+)
+
+/** For the first PANIC after a bad day. */
+const val WELCOME_BACK = "Welcome back. Yesterday doesn't define you."
 
 val PANIC_PRAISE = listOf(
     "That took strength.",

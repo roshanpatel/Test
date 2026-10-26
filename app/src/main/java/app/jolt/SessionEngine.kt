@@ -91,6 +91,10 @@ class SessionEngine(
     var promptShowing = false
         private set
 
+    /** How many Continues came before the most recent PANIC. */
+    var continuesBeforeLastPanic = 0
+        private set
+
     val isBlocked: Boolean get() = blockRemainingMs() > 0
 
     /** Currently in a watched app with the session clock running. */
@@ -184,6 +188,7 @@ class SessionEngine(
 
     /** PANIC button. */
     fun onPanic() {
+        continuesBeforeLastPanic = state.continuesInARow
         promptShowing = false
         ui.hidePrompt()
         timingSince = null

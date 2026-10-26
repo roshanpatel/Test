@@ -61,6 +61,10 @@ class Celebration(
     val praise: String,
     val milestones: List<String>,
     val streakDays: Int,
+    /** e.g. "4 h 30 min back so far: about 2 films". */
+    val timeBack: String?,
+    /** e.g. "2 more to 25 PANICs". */
+    val nextMilestone: String?,
 )
 
 /**
@@ -122,7 +126,15 @@ class Overlays(private val service: AccessibilityService) {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
             addView(ctx.label("Is what you're doing important?", 18f, bold = true))
-            addView(ctx.label("You've kept going a few times in a row. To continue, type your reason:", 14f, Palette.MUTED), spaced(ctx, top = 4))
+            addView(
+                ctx.label(
+                    "You've kept going a few times in a row. No judgement, just check in with yourself. " +
+                        "To continue, type your reason:",
+                    14f,
+                    Palette.MUTED,
+                ),
+                spaced(ctx, top = 4),
+            )
             addView(ctx.label("“$reason”", 15f, Palette.ACCENT, bold = true), spaced(ctx, top = 8))
             addView(typed, spaced(ctx, top = 8))
             addView(typingWarning, spaced(ctx, top = 4))
@@ -291,6 +303,8 @@ class Overlays(private val service: AccessibilityService) {
                 if (celebration.streakDays > 1) {
                     addView(centered("🔥 ${celebration.streakDays}-day streak", 15f, Palette.MUTED), spaced(ctx, top = 4))
                 }
+                celebration.timeBack?.let { addView(centered("⏳ $it", 14f, Palette.MUTED), spaced(ctx, top = 4)) }
+                celebration.nextMilestone?.let { addView(centered("🏆 $it", 14f, Palette.MUTED), spaced(ctx, top = 4)) }
                 addView(centered("Your watched apps are locked for", 15f, Palette.MUTED), spaced(ctx, top = 16))
                 countdown.textSize = 44f
             } else {

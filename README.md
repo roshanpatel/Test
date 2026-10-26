@@ -19,7 +19,9 @@ on the main screen, muted and looping), or, until you add some, one of four buil
 While settings are locked, clips can be added but not removed.
 
 The main screen also tracks your progress: today's totals, a streak of good days (a day where you
-pressed PANIC, or never chose Continue), and milestones.
+pressed PANIC, or never chose Continue), a progress bar to the next milestone, and time back from
+blocks in everyday terms ("about 2 films"). One slip a week is forgiven by a streak freeze, and
+the day after a slip opens with a kind word rather than a telling-off: everyone slips.
 
 A block can't be cancelled. While it runs:
 

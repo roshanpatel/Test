@@ -362,11 +362,89 @@ class SessionEngineTest {
     }
 
     @Test
-    fun bad_day_breaks_streak() {
+    fun one_bad_day_is_forgiven() {
         var stats = Stats().ensureStarted(10)
         stats = stats.recordContinue(11) // day 11: continued, never panicked
-        assertEquals(1, stats.streak(12)) // only day 12 (unused)
+        val streak = stats.streakInfo(12)
+        assertEquals(2, streak.days) // days 10 and 12; 11 is forgiven but doesn't count
+        assertEquals(1, streak.freezesUsed)
+        assertFalse(streak.freezeReady)
         assertEquals(0, Stats().streak(5))
+    }
+
+    @Test
+    fun second_bad_day_within_a_week_breaks_streak() {
+        var stats = Stats().ensureStarted(10)
+        stats = stats.recordContinue(11).recordContinue(13)
+        assertEquals(2, stats.streak(14)) // 14 and 12; 13 forgiven, 11 breaks it
+    }
+
+    @Test
+    fun bad_days_a_week_apart_are_both_forgiven() {
+        var stats = Stats().ensureStarted(1)
+        stats = stats.recordContinue(3).recordContinue(12)
+        val streak = stats.streakInfo(20)
+        assertEquals(18, streak.days)
+        assertEquals(2, streak.freezesUsed)
+        assertTrue(streak.freezeReady)
+    }
+
+    @Test
+    fun two_bad_days_in_a_row_break_streak() {
+        var stats = Stats().ensureStarted(1)
+        stats = stats.recordContinue(5).recordContinue(6)
+        assertEquals(2, stats.streak(8)) // 8 and 7
+    }
+
+    @Test
+    fun bad_yesterday_is_forgiven_while_today_is_unfinished() {
+        var stats = Stats().ensureStarted(10)
+        stats = stats.recordContinue(11).recordContinue(12)
+        assertEquals(1, stats.streak(12)) // day 10; 11 forgiven; 12 still in progress
+    }
+
+    @Test
+    fun bad_first_day_protects_nothing() {
+        val stats = Stats().ensureStarted(10).recordContinue(10)
+        val streak = stats.streakInfo(11)
+        assertEquals(1, streak.days)
+        assertEquals(0, streak.freezesUsed)
+    }
+
+    @Test
+    fun slip_yesterday_is_noticed() {
+        val stats = Stats().ensureStarted(10).recordContinue(11)
+        assertTrue(stats.slippedYesterday(12))
+        assertFalse(stats.slippedYesterday(11)) // day 10 was fine
+        assertFalse(Stats().slippedYesterday(12))
+        assertEquals(slipKindness(12), slipKindness(12))
+    }
+
+    @Test
+    fun time_back_in_real_terms() {
+        assertEquals(null, timeBackInRealTerms(10 * MINUTE_MS))
+        assertEquals("about a walk round the block", timeBackInRealTerms(20 * MINUTE_MS))
+        assertEquals("about a film", timeBackInRealTerms(150 * MINUTE_MS))
+        assertEquals("about 2 films", timeBackInRealTerms(4 * 60 * MINUTE_MS))
+        assertEquals("about 5 books", timeBackInRealTerms(30 * 60 * MINUTE_MS))
+    }
+
+    @Test
+    fun milestone_progress() {
+        assertEquals(0f, milestoneProgress(0), 0.001f)
+        assertEquals(0.5f, milestoneProgress(3), 0.001f) // between 1 and 5
+        assertEquals(0f, milestoneProgress(10), 0.001f)
+        assertEquals(1f, milestoneProgress(5000), 0.001f)
+    }
+
+    @Test
+    fun remembers_continues_before_panic() {
+        engine.onForeground(FACEBOOK)
+        runFor(3 * MINUTE_MS)
+        engine.onContinue()
+        runFor(3 * MINUTE_MS)
+        engine.onPanic()
+        assertEquals(1, engine.continuesBeforeLastPanic)
     }
 
     @Test

@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -15,6 +16,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.Switch
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -39,6 +41,9 @@ class MainActivity : Activity() {
     private lateinit var lockedNote: TextView
     private lateinit var lockText: TextView
     private lateinit var progress: TextView
+    private lateinit var kindness: TextView
+    private lateinit var milestoneBar: ProgressBar
+    private lateinit var milestoneText: TextView
     private lateinit var breathingSwitch: Switch
     private lateinit var reasonInput: EditText
     private lateinit var saveReason: Button
@@ -72,11 +77,29 @@ class MainActivity : Activity() {
         column.addView(status, block(top = 20))
 
         column.addView(section("Your progress"))
-        progress = label("", 15f).apply {
+        kindness = label("", 15f, Palette.ACCENT).apply {
             background = rounded(Palette.CARD)
             setPadding(dp(16), dp(14), dp(16), dp(14))
         }
-        column.addView(progress, block(top = 8))
+        column.addView(kindness, block(top = 8))
+        progress = label("", 15f)
+        milestoneBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 1000
+            progressTintList = ColorStateList.valueOf(Palette.ACCENT)
+            progressBackgroundTintList = ColorStateList.valueOf(Palette.NEUTRAL)
+        }
+        milestoneText = label("", 13f, Palette.MUTED)
+        column.addView(
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = rounded(Palette.CARD)
+                setPadding(dp(16), dp(14), dp(16), dp(14))
+                addView(progress)
+                addView(milestoneBar, block(top = 12))
+                addView(milestoneText, block(top = 2))
+            },
+            block(top = 8),
+        )
 
         column.addView(section("Setup"))
         accessibilityRow = SetupRow(
@@ -217,17 +240,30 @@ class MainActivity : Activity() {
         }
 
         val stats = prefs.loadStats()
-        val today = stats.day(clock.localDay())
-        val streak = stats.streak(clock.localDay())
+        val day = clock.localDay()
+        val today = stats.day(day)
+        val streak = stats.streakInfo(day)
         val next = nextPanicMilestone(stats.totalPanics)
+
+        kindness.text = if (stats.slippedYesterday(day)) "💛 ${slipKindness(day)}" else ""
+        kindness.visibility = if (kindness.text.isEmpty()) View.GONE else View.VISIBLE
+
         progress.text = buildString {
             append("Today: ${formatHoursMinutes(today.watchedMs)} in watched apps · ")
             append("${today.panics} PANIC${if (today.panics == 1) "" else "s"}")
-            append("\n🔥 Streak: $streak good ${if (streak == 1) "day" else "days"}")
-            append("\n🏆 All time: ${stats.totalPanics} PANIC${if (stats.totalPanics == 1) "" else "s"}, ")
-            append("${formatHoursMinutes(stats.totalBlockedMs)} blocked")
-            if (next != null) append("\nNext milestone: $next PANICs")
-            append("\n\nA good day is one where you pressed PANIC, or never chose Continue.")
+            append("\n🔥 Streak: ${streak.days} good ${if (streak.days == 1) "day" else "days"}")
+            if (streak.freezesUsed > 0) append(" (❄️ ${streak.freezesUsed} forgiven)")
+            append(if (streak.freezeReady) "\n❄️ Streak freeze ready: your next slip is forgiven." else "\n❄️ Streak freeze recharging.")
+            append("\n🏆 All time: ${stats.totalPanics} PANIC${if (stats.totalPanics == 1) "" else "s"}")
+            append("\n⏳ Time back: ${formatHoursMinutes(stats.totalBlockedMs)}")
+            timeBackInRealTerms(stats.totalBlockedMs)?.let { append(", $it") }
+            append("\n\nA good day is one where you pressed PANIC, or never chose Continue. One slip a week is forgiven.")
+        }
+        milestoneBar.progress = (milestoneProgress(stats.totalPanics) * 1000).toInt()
+        milestoneText.text = if (next != null) {
+            "${next - stats.totalPanics} more PANIC${if (next - stats.totalPanics == 1) "" else "s"} to $next 🏆"
+        } else {
+            "Every milestone reached. Legend."
         }
 
         if (breathingSwitch.isChecked != prefs.breathing) breathingSwitch.isChecked = prefs.breathing

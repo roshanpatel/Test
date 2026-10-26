@@ -246,17 +246,28 @@ class JoltService : AccessibilityService(), EngineUi {
 
     private fun celebration(): Celebration {
         val stats = engine.stats
-        val streak = stats.streak(clock.localDay())
+        val today = clock.localDay()
+        val streak = stats.streak(today)
         // Only celebrate a streak milestone on the day's first PANIC, when it was reached.
         val firstToday = engine.today.panics == 1
+        val praise = when {
+            engine.continuesBeforeLastPanic > 0 -> COMEBACK_PRAISE.random()
+            firstToday && stats.slippedYesterday(today) -> WELCOME_BACK
+            else -> PANIC_PRAISE.random()
+        }
+        val next = nextPanicMilestone(stats.totalPanics)
         return Celebration(
             panicNumber = stats.totalPanics,
-            praise = PANIC_PRAISE.random(),
+            praise = praise,
             milestones = listOfNotNull(
                 panicMilestone(stats.totalPanics),
                 streakMilestone(streak).takeIf { firstToday },
             ),
             streakDays = streak,
+            timeBack = timeBackInRealTerms(stats.totalBlockedMs)?.let {
+                "${formatHoursMinutes(stats.totalBlockedMs)} back so far: $it"
+            },
+            nextMilestone = next?.let { "${it - stats.totalPanics} more to $it PANICs" },
         )
     }
 
