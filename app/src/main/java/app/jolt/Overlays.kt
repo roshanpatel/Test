@@ -22,12 +22,16 @@ import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
 import android.view.Gravity
+import android.view.ActionMode
 import android.view.KeyEvent
+import android.view.Menu
+import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.view.WindowManager
 import android.view.animation.AccelerateDecelerateInterpolator
+import android.view.inputmethod.EditorInfo
 import android.view.animation.LinearInterpolator
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -103,13 +107,15 @@ class Overlays(private val service: AccessibilityService) {
         }
 
         // Typing step, shown once the countdown ends when a reason is required.
-        val typed = EditText(ctx).apply {
+        val typed = StrictEditText(ctx).apply {
             hint = "Type it here"
             setTextColor(Palette.TEXT)
             setHintTextColor(Palette.MUTED)
             background = ctx.rounded(Palette.NEUTRAL, 12)
             setPadding(ctx.dp(14), ctx.dp(12), ctx.dp(14), ctx.dp(12))
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        }
+        val typingWarning = ctx.label("Letter by letter, please. No shortcuts.", 13f, Palette.PANIC).apply {
+            visibility = View.GONE
         }
         val typingStep = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
@@ -118,6 +124,7 @@ class Overlays(private val service: AccessibilityService) {
             addView(ctx.label("You've kept going a few times in a row. To continue, type your reason:", 14f, Palette.MUTED), spaced(ctx, top = 4))
             addView(ctx.label("“$reason”", 15f, Palette.ACCENT, bold = true), spaced(ctx, top = 8))
             addView(typed, spaced(ctx, top = 8))
+            addView(typingWarning, spaced(ctx, top = 4))
         }
 
         val continueButton = ctx.pillButton("", Palette.NEUTRAL) {
@@ -135,10 +142,22 @@ class Overlays(private val service: AccessibilityService) {
                 "Continue browsing (in ${formatSeconds(secondsLeft)})"
             }
         }
+        // Anything that adds several characters at once (paste, autofill, a keyboard
+        // suggestion) wipes the box, so the reason really has to be typed out.
         typed.addTextChangedListener(object : TextWatcher {
+            private var shortcut = false
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            override fun afterTextChanged(s: Editable?) = updateContinue()
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                if (count - before > MAX_CHARS_PER_KEYSTROKE) shortcut = true
+            }
+            override fun afterTextChanged(s: Editable?) {
+                if (shortcut) {
+                    shortcut = false
+                    typingWarning.visibility = View.VISIBLE
+                    s?.clear()
+                }
+                updateContinue()
+            }
         })
         updateContinue()
 
@@ -230,58 +249,46 @@ class Overlays(private val service: AccessibilityService) {
             gravity = Gravity.CENTER
         }
 
+        fun centered(text: String, sizeSp: Float, color: Int = Palette.TEXT, bold: Boolean = false) =
+            ctx.label(text, sizeSp, color, bold).apply { gravity = Gravity.CENTER }
+
+        // Everything fits on one screen: the clip (or a spacer) soaks up whatever height is left.
         val column = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(ctx.dp(32), 0, ctx.dp(32), 0)
+            setPadding(ctx.dp(28), ctx.dp(16), ctx.dp(28), ctx.dp(16))
             if (celebration != null) {
-                addView(inspiration(ctx), LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { bottomMargin = ctx.dp(16) })
-                addView(ctx.label("🎉 Well done!", 34f, Palette.GOOD, bold = true).apply { gravity = Gravity.CENTER })
-                addView(
-                    ctx.label("That's PANIC #${celebration.panicNumber}. ${celebration.praise}", 18f).apply { gravity = Gravity.CENTER },
-                    spaced(ctx, top = 8),
-                )
+                addView(inspiration(ctx), LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f).apply { bottomMargin = ctx.dp(12) })
+                addView(centered("🎉 Well done!", 30f, Palette.GOOD, bold = true))
+                addView(centered("That's PANIC #${celebration.panicNumber}. ${celebration.praise}", 17f), spaced(ctx, top = 6))
                 celebration.milestones.forEach {
-                    addView(ctx.label("🏆 $it", 18f, Palette.ACCENT, bold = true).apply { gravity = Gravity.CENTER }, spaced(ctx, top = 8))
+                    addView(centered("🏆 $it", 17f, Palette.ACCENT, bold = true), spaced(ctx, top = 6))
                 }
                 if (celebration.streakDays > 1) {
-                    addView(
-                        ctx.label("🔥 ${celebration.streakDays}-day streak", 16f, Palette.MUTED).apply { gravity = Gravity.CENTER },
-                        spaced(ctx, top = 6),
-                    )
+                    addView(centered("🔥 ${celebration.streakDays}-day streak", 15f, Palette.MUTED), spaced(ctx, top = 4))
                 }
-                addView(ctx.label("Your watched apps are locked for", 17f, Palette.MUTED).apply { gravity = Gravity.CENTER }, spaced(ctx, top = 28))
+                addView(centered("Your watched apps are locked for", 15f, Palette.MUTED), spaced(ctx, top = 16))
+                countdown.textSize = 44f
             } else {
-                addView(ctx.label("BLOCKED", 34f, bold = true).apply { gravity = Gravity.CENTER })
-                addView(ctx.label("Your watched apps are locked for", 17f, Palette.MUTED).apply { gravity = Gravity.CENTER }, spaced(ctx, top = 8))
+                addView(View(ctx), LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+                addView(centered("BLOCKED", 34f, bold = true))
+                addView(centered("Your watched apps are locked for", 17f, Palette.MUTED), spaced(ctx, top = 8))
             }
-            addView(countdown, spaced(ctx, top = 8))
-            addView(
-                ctx.label(SUGGESTIONS.random(), 20f, Palette.ACCENT, bold = true).apply { gravity = Gravity.CENTER },
-                spaced(ctx, top = 24),
-            )
+            addView(countdown, spaced(ctx, top = 4))
+            addView(centered(SUGGESTIONS.random(), 18f, Palette.ACCENT, bold = true), spaced(ctx, top = 12))
             addView(
                 ctx.pillButton("OK", Palette.NEUTRAL) {
                     hideBlock()
                     onDismiss()
                 },
-                spaced(ctx, top = 40),
+                spaced(ctx, top = 16),
             )
+            if (celebration == null) addView(View(ctx), LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
         }
 
         val root = scrim(ctx, Palette.BACKGROUND).apply {
-            addView(
-                ScrollView(ctx).apply {
-                    isFillViewport = true
-                    addView(
-                        FrameLayout(ctx).apply {
-                            setPadding(0, ctx.dp(24), 0, ctx.dp(24))
-                            addView(column, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.CENTER))
-                        },
-                    )
-                },
-                FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT),
-            )
+            fitsSystemWindows = true // keep clear of the status and navigation bars
+            addView(column, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             if (celebration != null) {
                 addView(ConfettiView(ctx), FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             }
@@ -320,8 +327,8 @@ class Overlays(private val service: AccessibilityService) {
         val scene = Scene.entries.random()
         return LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            addView(SceneView(ctx, scene), LinearLayout.LayoutParams(MATCH_PARENT, ctx.dp(MEDIA_HEIGHT_DP)))
-            addView(ctx.label(scene.caption, 16f, Palette.MUTED).apply { gravity = Gravity.CENTER }, spaced(ctx, top = 8))
+            addView(SceneView(ctx, scene), LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+            addView(ctx.label(scene.caption, 15f, Palette.MUTED).apply { gravity = Gravity.CENTER }, spaced(ctx, top = 6))
         }
     }
 
@@ -348,8 +355,6 @@ class Overlays(private val service: AccessibilityService) {
         }
         FrameLayout(ctx).apply {
             addView(media, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT, Gravity.CENTER))
-            layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, ctx.dp(MEDIA_HEIGHT_DP))
-            minimumHeight = ctx.dp(MEDIA_HEIGHT_DP)
         }
     } catch (e: Exception) {
         null
@@ -423,6 +428,41 @@ class Overlays(private val service: AccessibilityService) {
     private fun formatSeconds(s: Int) = if (s < 60) "$s" else formatMmSs(s * 1000L)
 
     private fun minutes(n: Int) = if (n == 1) "minute" else "minutes"
+
+    /**
+     * A text box with every typing shortcut turned off: no autofill, no keyboard suggestions
+     * or learning, no paste. Treated as a visible password, which makes most keyboards drop
+     * word suggestions and swipe typing.
+     */
+    private class StrictEditText(context: Context) : EditText(context) {
+        init {
+            inputType = InputType.TYPE_CLASS_TEXT or
+                InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or
+                InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            typeface = Typeface.DEFAULT // the password variation switches to monospace
+            imeOptions = EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+            isLongClickable = false
+            setTextIsSelectable(false)
+            val noMenu = object : ActionMode.Callback {
+                override fun onCreateActionMode(mode: ActionMode?, menu: Menu?) = false
+                override fun onPrepareActionMode(mode: ActionMode?, menu: Menu?) = false
+                override fun onActionItemClicked(mode: ActionMode?, item: MenuItem?) = false
+                override fun onDestroyActionMode(mode: ActionMode?) {}
+            }
+            customSelectionActionModeCallback = noMenu
+            customInsertionActionModeCallback = noMenu
+        }
+
+        override fun isSuggestionsEnabled() = false
+
+        override fun getAutofillType() = View.AUTOFILL_TYPE_NONE
+
+        override fun onTextContextMenuItem(id: Int): Boolean = when (id) {
+            android.R.id.paste, android.R.id.pasteAsPlainText, android.R.id.autofill -> false
+            else -> super.onTextContextMenuItem(id)
+        }
+    }
 
     /** Eats the back key so the overlay can't be dismissed without choosing. */
     private class BackBlockingFrame(context: Context) : FrameLayout(context) {
@@ -530,8 +570,8 @@ class Overlays(private val service: AccessibilityService) {
 
     private companion object {
         const val DEFAULT_REASON = "I choose to keep scrolling"
-        const val MEDIA_HEIGHT_DP = 220
         const val MAX_IMAGE_PX = 1080
+        const val MAX_CHARS_PER_KEYSTROKE = 2
 
         val SUGGESTIONS = listOf(
             "Put the phone down.",
