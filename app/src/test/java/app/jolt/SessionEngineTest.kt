@@ -437,6 +437,57 @@ class SessionEngineTest {
         assertEquals(1f, milestoneProgress(5000), 0.001f)
     }
 
+    /** Works out "a op b" or "a × b + c" the slow way, to check the generator's answers. */
+    private fun evaluate(question: String): Int {
+        val t = question.split(" ")
+        fun apply(x: Int, op: String, y: Int) = when (op) {
+            "+" -> x + y
+            "−" -> x - y
+            "×" -> x * y
+            else -> error(op)
+        }
+        val first = apply(t[0].toInt(), t[1], t[2].toInt())
+        return if (t.size == 5) apply(first, t[3], t[4].toInt()) else first
+    }
+
+    @Test
+    fun maths_answers_are_right_and_never_negative() {
+        val random = kotlin.random.Random(42)
+        for (level in 1..8) repeat(200) {
+            val p = mathProblem(level, random)
+            assertEquals(p.question, evaluate(p.question), p.answer)
+            assertTrue(p.question, p.answer >= 0)
+        }
+    }
+
+    @Test
+    fun maths_gets_harder_with_level() {
+        val random = kotlin.random.Random(7)
+        fun hardest(level: Int) = (1..200).maxOf { mathProblem(level, random).answer }
+        fun easiest(level: Int) = (1..200).minOf { mathProblem(level, random).answer }
+        assertTrue(hardest(1) <= 18)
+        assertTrue(easiest(5) >= 12 * 11)
+        assertTrue(easiest(6) > hardest(3))
+        assertEquals(mathProblem(6, kotlin.random.Random(1)), mathProblem(99, kotlin.random.Random(1)))
+    }
+
+    @Test
+    fun recognises_calculators() {
+        assertTrue(isCalculator("com.google.android.calculator"))
+        assertTrue(isCalculator("com.sec.android.app.popupcalculator"))
+        assertFalse(isCalculator("com.android.chrome"))
+    }
+
+    @Test
+    fun maths_level_rises_with_each_continue() {
+        engine.onForeground(FACEBOOK)
+        runFor(3 * MINUTE_MS)
+        assertEquals(1, engine.nextContinueNumber)
+        engine.onContinue()
+        runFor(3 * MINUTE_MS)
+        assertEquals(2, engine.nextContinueNumber)
+    }
+
     @Test
     fun remembers_continues_before_panic() {
         engine.onForeground(FACEBOOK)

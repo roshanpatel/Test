@@ -45,6 +45,7 @@ class MainActivity : Activity() {
     private lateinit var milestoneBar: ProgressBar
     private lateinit var milestoneText: TextView
     private lateinit var breathingSwitch: Switch
+    private lateinit var mathsSwitch: Switch
     private lateinit var reasonInput: EditText
     private lateinit var saveReason: Button
     private lateinit var clips: Clips
@@ -159,6 +160,22 @@ class MainActivity : Activity() {
             }
         }
         column.addView(breathingSwitch, block(top = 8))
+        mathsSwitch = Switch(this).apply {
+            text = "Maths question before Continue (harder each time)"
+            textSize = 15f
+            setTextColor(Palette.TEXT)
+            isChecked = prefs.maths
+            setOnCheckedChangeListener { button, checked ->
+                if (checked == prefs.maths) return@setOnCheckedChangeListener
+                val lock = prefs.settledLock(clock)
+                if (!checked && (isBlocked() || !lock.isOpen(clock))) {
+                    button.isChecked = true // turning it off loosens the rules
+                } else {
+                    prefs.maths = checked
+                }
+            }
+        }
+        column.addView(mathsSwitch, block(top = 8))
         column.addView(
             label(
                 "Your reason. It's shown on every time check, and from the $TYPE_REASON_ON_CONTINUE" +
@@ -267,6 +284,7 @@ class MainActivity : Activity() {
         }
 
         if (breathingSwitch.isChecked != prefs.breathing) breathingSwitch.isChecked = prefs.breathing
+        if (mathsSwitch.isChecked != prefs.maths) mathsSwitch.isChecked = prefs.maths
         val canEditReason = !blocked && !locked
         reasonInput.isEnabled = canEditReason
         saveReason.isEnabled = canEditReason

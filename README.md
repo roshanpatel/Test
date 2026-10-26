@@ -10,7 +10,9 @@ default, up to 5 minutes):
   session. The check stays on screen until you choose.
 
 The check shows your own reason (set it on the main screen), today's time in watched apps, and
-an optional breathing exercise. From the 3rd Continue in a row, continuing also needs your
+an optional breathing exercise. After the countdown, Continue also needs a maths question
+answered (on by default): it gets harder with each Continue in a row, from 7 + 8 up to 37 × 24 + 19,
+and opening a calculator earns a cheeky remark (the sum changes when you come back anyway). From the 3rd Continue in a row, continuing also needs your
 reason typed out, under the question "Is what you're doing important?". The count resets after a
 PANIC or a 30-minute break.
 

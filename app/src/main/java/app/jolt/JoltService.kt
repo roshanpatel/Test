@@ -44,6 +44,8 @@ class JoltService : AccessibilityService(), EngineUi {
     private var lastActivityPkg: String? = null
     private var lastTamperCheck = 0L
     private var lastLockedNotice = 0L
+    /** When the maths question was last left unanswered, to catch a calculator trip. */
+    private var mathsLeftAt = 0L
     private var watchdogRunning = false
     private var receiverRegistered = false
 
@@ -166,7 +168,13 @@ class JoltService : AccessibilityService(), EngineUi {
 
     private fun onAppOpened(pkg: String) {
         lastActivityPkg = pkg
+        val now = SystemClock.elapsedRealtime()
+        if (overlays.mathsShowing) mathsLeftAt = now
         if (isScreenOn()) engine.onForeground(pkg)
+        if (isCalculator(pkg) && mathsLeftAt > 0 && now - mathsLeftAt < CALCULATOR_WINDOW_MS) {
+            mathsLeftAt = 0
+            overlays.showJab(CALCULATOR_JABS.random())
+        }
         ensureWatchdog()
     }
 
@@ -226,6 +234,8 @@ class JoltService : AccessibilityService(), EngineUi {
                 reason = prefs.reason,
                 todayWatchedMs = engine.today.watchedMs,
                 needsReason = engine.continueNeedsReason,
+                maths = prefs.maths,
+                mathsLevel = engine.nextContinueNumber,
             ),
             onContinue = { engine.onContinue() },
             onPanic = { engine.onPanic() },
@@ -301,5 +311,6 @@ class JoltService : AccessibilityService(), EngineUi {
         const val TAMPER_CHECK_INTERVAL_MS = 300L
         const val WATCHDOG_INTERVAL_MS = 2000L
         const val LOCKED_NOTICE_INTERVAL_MS = 3000L
+        const val CALCULATOR_WINDOW_MS = 60_000L
     }
 }

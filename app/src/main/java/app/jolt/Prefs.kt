@@ -24,6 +24,10 @@ class Prefs(context: Context) : StateStore, StatsStore {
         get() = sp.getBoolean(KEY_BREATHING, true)
         set(value) = sp.edit().putBoolean(KEY_BREATHING, value).apply()
 
+    var maths: Boolean
+        get() = sp.getBoolean(KEY_MATHS, true)
+        set(value) = sp.edit().putBoolean(KEY_MATHS, value).apply()
+
     /** The user's own reason for cutting back, shown on the time check. */
     var reason: String
         get() = sp.getString(KEY_REASON, null).orEmpty()
@@ -111,6 +115,7 @@ class Prefs(context: Context) : StateStore, StatsStore {
         const val KEY_BLOCK_MIN = "block_min"
         const val KEY_PAUSE_SEC = "pause_sec"
         const val KEY_BREATHING = "breathing"
+        const val KEY_MATHS = "maths"
         const val KEY_REASON = "reason"
         const val KEY_STATS = "stats"
     }

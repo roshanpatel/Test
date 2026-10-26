@@ -33,6 +33,7 @@ import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.view.animation.LinearInterpolator
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -53,6 +54,9 @@ class PromptInfo(
     val reason: String,
     val todayWatchedMs: Long,
     val needsReason: Boolean,
+    val maths: Boolean,
+    /** 1 for the first Continue in a row, rising with each one. */
+    val mathsLevel: Int,
 )
 
 /** What the block screen celebrates right after PANIC. */
@@ -84,6 +88,11 @@ class Overlays(private val service: AccessibilityService) {
     private var blockView: View? = null
     private var blockTicker: Runnable? = null
     private var video: VideoView? = null
+    private var jabView: View? = null
+
+    /** The maths question is on screen, waiting for an answer. */
+    var mathsShowing = false
+        private set
 
     /**
      * PANIC works straight away. Continue stays locked until the countdown ends, so carrying
@@ -140,19 +149,51 @@ class Overlays(private val service: AccessibilityService) {
             addView(typingWarning, spaced(ctx, top = 4))
         }
 
+        // Maths step: a sum that gets harder with each Continue in a row.
+        var problem = mathProblem(info.mathsLevel)
+        var mathsSolved = !info.maths
+        val mathsQuestion = ctx.label("${problem.question} = ?", 30f, Palette.ACCENT, bold = true).apply {
+            gravity = Gravity.CENTER
+        }
+        val mathsFeedback = ctx.label("", 13f, Palette.PANIC).apply { visibility = View.GONE }
+        val mathsAnswer = StrictEditText(ctx, numeric = true).apply {
+            hint = "Answer"
+            gravity = Gravity.CENTER
+            textSize = 22f
+            setTextColor(Palette.TEXT)
+            setHintTextColor(Palette.MUTED)
+            background = ctx.rounded(Palette.NEUTRAL, 12)
+            setPadding(ctx.dp(14), ctx.dp(10), ctx.dp(14), ctx.dp(10))
+        }
+        val mathsStep = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            addView(ctx.label("Human check, level ${info.mathsLevel.coerceAtMost(MAX_MATHS_LEVEL)}", 18f, bold = true))
+            addView(
+                ctx.label("Prove you're a human, not a scroll-bot. It gets harder each time you keep going.", 14f, Palette.MUTED),
+                spaced(ctx, top = 4),
+            )
+            addView(mathsQuestion, spaced(ctx, top = 10))
+            addView(mathsAnswer, spaced(ctx, top = 8))
+            addView(mathsFeedback, spaced(ctx, top = 4))
+        }
+
+        fun canContinue() = secondsLeft <= 0 && mathsSolved &&
+            (!info.needsReason || matchesReason(typed.text.toString(), reason))
+
         val continueButton = ctx.pillButton("", Palette.NEUTRAL) {
-            if (secondsLeft <= 0 && (!info.needsReason || matchesReason(typed.text.toString(), reason))) decide(onContinue)
+            if (canContinue()) decide(onContinue)
         }
 
         fun updateContinue() {
-            val timerDone = secondsLeft <= 0
-            val unlocked = timerDone && (!info.needsReason || matchesReason(typed.text.toString(), reason))
+            val unlocked = canContinue()
             continueButton.isEnabled = unlocked
             continueButton.alpha = if (unlocked) 1f else 0.4f
-            continueButton.text = if (timerDone) {
-                "Continue browsing (+${info.sessionMinutes} min)"
-            } else {
-                "Continue browsing (in ${formatSeconds(secondsLeft)})"
+            continueButton.text = when {
+                secondsLeft > 0 -> "Continue browsing (in ${formatSeconds(secondsLeft)})"
+                !mathsSolved -> "Solve the sum to continue"
+                !unlocked -> "Type your reason to continue"
+                else -> "Continue browsing (+${info.sessionMinutes} min)"
             }
         }
         // Anything that adds several characters at once (paste, autofill, a keyboard
@@ -202,6 +243,7 @@ class Overlays(private val service: AccessibilityService) {
                 ctx.pillButton("PANIC BUTTON!", Palette.PANIC) { decide(onPanic) }.apply { textSize = 22f; minHeight = ctx.dp(72) },
                 spaced(ctx, top = 20),
             )
+            addView(mathsStep, spaced(ctx, top = 16))
             addView(typingStep, spaced(ctx, top = 16))
             addView(continueButton, spaced(ctx, top = 12))
         }
@@ -221,32 +263,67 @@ class Overlays(private val service: AccessibilityService) {
                 setOnApplyWindowInsetsListener { view, insets ->
                     val keyboard = insets.getInsets(WindowInsets.Type.ime() or WindowInsets.Type.systemBars())
                     view.setPadding(0, keyboard.top, 0, keyboard.bottom)
-                    if (typed.hasFocus()) scroll.post { scroll.smoothScrollTo(0, typingStep.top + card.top) }
+                    // The active step sits at the top of the card, so keep the top in view.
+                    if (typed.hasFocus() || mathsAnswer.hasFocus()) scroll.post { scroll.smoothScrollTo(0, 0) }
                     insets
                 }
             }
         }
 
         /**
-         * Moves the typing box and Continue to the top of the screen, right under the title,
-         * so the keyboard can't cover them.
+         * Moves [step] and Continue to the top of the screen, right under the title, so the
+         * keyboard can't cover them.
          */
-        fun showTypingStep() {
+        fun showStep(step: View, input: EditText) {
             breathingView?.stop()
             breathingView?.visibility = View.GONE
-            card.removeView(typingStep)
+            card.removeView(step)
             card.removeView(continueButton)
-            card.addView(typingStep, 1, spaced(ctx, top = 12))
+            card.addView(step, 1, spaced(ctx, top = 12))
             card.addView(continueButton, 2, spaced(ctx, top = 12))
             card.layoutParams = FrameLayout.LayoutParams(ctx.dp(340), WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
                 topMargin = ctx.dp(24)
             }
-            typingStep.visibility = View.VISIBLE
-            typed.requestFocus()
+            step.visibility = View.VISIBLE
+            input.requestFocus()
             scroll.post { scroll.scrollTo(0, 0) }
         }
+
+        fun showTypingStep() = showStep(typingStep, typed)
+
+        fun showMathsStep() {
+            mathsShowing = true
+            showStep(mathsStep, mathsAnswer)
+        }
+
+        // Checks the answer as soon as it has as many digits as the right one.
+        mathsAnswer.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                val typedAnswer = s?.toString()?.trim().orEmpty()
+                if (mathsSolved || typedAnswer.length < problem.answer.toString().length) return
+                if (typedAnswer.toIntOrNull() == problem.answer) {
+                    mathsSolved = true
+                    mathsShowing = false
+                    mathsStep.visibility = View.GONE
+                    if (info.needsReason) {
+                        showTypingStep()
+                    } else {
+                        hideKeyboard(mathsAnswer)
+                    }
+                } else {
+                    problem = mathProblem(info.mathsLevel)
+                    mathsQuestion.text = "${problem.question} = ?"
+                    mathsFeedback.text = WRONG_ANSWER.random()
+                    mathsFeedback.visibility = View.VISIBLE
+                    s?.clear()
+                }
+                updateContinue()
+            }
+        })
         promptView = root
-        add(root, typing = info.needsReason)
+        add(root, typing = info.needsReason || info.maths)
         vibrate(longArrayOf(0, 400))
         breathingView?.start()
 
@@ -256,7 +333,10 @@ class Overlays(private val service: AccessibilityService) {
                 if (secondsLeft <= 0) {
                     countdown.visibility = View.GONE
                     hintLabel.text = "Your call."
-                    if (info.needsReason) showTypingStep()
+                    when {
+                        info.maths -> showMathsStep()
+                        info.needsReason -> showTypingStep()
+                    }
                 } else {
                     countdown.text = formatSeconds(secondsLeft)
                     handler.postDelayed(this, 1000)
@@ -269,6 +349,7 @@ class Overlays(private val service: AccessibilityService) {
     }
 
     fun hidePrompt() {
+        mathsShowing = false
         promptTicker?.let(handler::removeCallbacks)
         promptTicker = null
         breathingView?.stop()
@@ -419,9 +500,45 @@ class Overlays(private val service: AccessibilityService) {
         return BitmapDrawable(ctx.resources, bitmap)
     }
 
+    /** A short message at the top of the screen that disappears by itself. */
+    fun showJab(text: String) {
+        jabView?.let(::remove)
+        val ctx: Context = service
+        val view = ctx.label(text, 17f, Palette.TEXT, bold = true).apply {
+            gravity = Gravity.CENTER
+            background = ctx.rounded(Palette.CARD, 20)
+            setPadding(ctx.dp(20), ctx.dp(16), ctx.dp(20), ctx.dp(16))
+        }
+        val params = WindowManager.LayoutParams(
+            WRAP_CONTENT,
+            WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            y = ctx.dp(72)
+        }
+        windowManager.addView(view, params)
+        jabView = view
+        handler.postDelayed({
+            if (jabView === view) {
+                remove(view)
+                jabView = null
+            }
+        }, JAB_MS)
+    }
+
+    private fun hideKeyboard(view: View) {
+        (service.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+            .hideSoftInputFromWindow(view.windowToken, 0)
+    }
+
     fun hideAll() {
         hidePrompt()
         hideBlock()
+        jabView?.let(::remove)
+        jabView = null
     }
 
     private fun add(view: View, typing: Boolean = false) {
@@ -473,11 +590,15 @@ class Overlays(private val service: AccessibilityService) {
      * or learning, no paste. Treated as a visible password, which makes most keyboards drop
      * word suggestions and swipe typing.
      */
-    private class StrictEditText(context: Context) : EditText(context) {
+    private class StrictEditText(context: Context, numeric: Boolean = false) : EditText(context) {
         init {
-            inputType = InputType.TYPE_CLASS_TEXT or
-                InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or
-                InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            inputType = if (numeric) {
+                InputType.TYPE_CLASS_NUMBER
+            } else {
+                InputType.TYPE_CLASS_TEXT or
+                    InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or
+                    InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            }
             typeface = Typeface.DEFAULT // the password variation switches to monospace
             imeOptions = EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
             importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
@@ -611,6 +732,7 @@ class Overlays(private val service: AccessibilityService) {
         const val DEFAULT_REASON = "I choose to keep scrolling"
         const val MAX_IMAGE_PX = 1080
         const val MAX_CHARS_PER_KEYSTROKE = 2
+        const val JAB_MS = 3500L
 
         val SUGGESTIONS = listOf(
             "Put the phone down.",

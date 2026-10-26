@@ -106,6 +106,9 @@ class SessionEngine(
 
     val today: DayStats get() = statsState.day(clock.localDay())
 
+    /** Which Continue in a row the next one would be: 1 for the first. */
+    val nextContinueNumber: Int get() = state.continuesInARow + 1
+
     /** Whether the next Continue needs the user's reason typed out. */
     val continueNeedsReason: Boolean get() = state.continuesInARow + 1 >= TYPE_REASON_ON_CONTINUE
 
