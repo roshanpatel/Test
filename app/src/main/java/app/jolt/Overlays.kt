@@ -29,6 +29,7 @@ import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.view.inputmethod.EditorInfo
@@ -193,18 +194,44 @@ class Overlays(private val service: AccessibilityService) {
             addView(continueButton, spaced(ctx, top = 12))
         }
 
-        val root = scrim(ctx, Palette.SCRIM).apply {
+        val scroll = ScrollView(ctx).apply {
+            isFillViewport = true
             addView(
-                ScrollView(ctx).apply {
-                    isFillViewport = true
-                    addView(
-                        FrameLayout(ctx).apply {
-                            addView(card, FrameLayout.LayoutParams(ctx.dp(340), WRAP_CONTENT, Gravity.CENTER))
-                        },
-                    )
+                FrameLayout(ctx).apply {
+                    addView(card, FrameLayout.LayoutParams(ctx.dp(340), WRAP_CONTENT, Gravity.CENTER))
                 },
-                FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT),
             )
+        }
+        val root = scrim(ctx, Palette.SCRIM).apply {
+            addView(scroll, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                // Shrink to the space above the keyboard, so the scroll view can bring the box into view.
+                setOnApplyWindowInsetsListener { view, insets ->
+                    val keyboard = insets.getInsets(WindowInsets.Type.ime() or WindowInsets.Type.systemBars())
+                    view.setPadding(0, keyboard.top, 0, keyboard.bottom)
+                    if (typed.hasFocus()) scroll.post { scroll.smoothScrollTo(0, typingStep.top + card.top) }
+                    insets
+                }
+            }
+        }
+
+        /**
+         * Moves the typing box and Continue to the top of the screen, right under the title,
+         * so the keyboard can't cover them.
+         */
+        fun showTypingStep() {
+            breathingView?.stop()
+            breathingView?.visibility = View.GONE
+            card.removeView(typingStep)
+            card.removeView(continueButton)
+            card.addView(typingStep, 1, spaced(ctx, top = 12))
+            card.addView(continueButton, 2, spaced(ctx, top = 12))
+            card.layoutParams = FrameLayout.LayoutParams(ctx.dp(340), WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                topMargin = ctx.dp(24)
+            }
+            typingStep.visibility = View.VISIBLE
+            typed.requestFocus()
+            scroll.post { scroll.scrollTo(0, 0) }
         }
         promptView = root
         add(root, typing = info.needsReason)
@@ -217,10 +244,7 @@ class Overlays(private val service: AccessibilityService) {
                 if (secondsLeft <= 0) {
                     countdown.visibility = View.GONE
                     hintLabel.text = "Your call."
-                    if (info.needsReason) {
-                        typingStep.visibility = View.VISIBLE
-                        typed.requestFocus()
-                    }
+                    if (info.needsReason) showTypingStep()
                 } else {
                     countdown.text = formatSeconds(secondsLeft)
                     handler.postDelayed(this, 1000)
@@ -396,7 +420,8 @@ class Overlays(private val service: AccessibilityService) {
         )
         if (typing) {
             @Suppress("DEPRECATION")
-            params.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+            params.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
+                WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE
         }
         windowManager.addView(view, params)
     }
