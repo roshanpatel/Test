@@ -10,12 +10,27 @@ const val RESET_AFTER_BREAK_MS = 30 * MINUTE_MS
 /** Default seconds the "time check" pop-up keeps Continue locked. PANIC works throughout. */
 const val DEFAULT_PAUSE_SECONDS = 10
 
+/** No session is ever shorter than this, however many Continues in a row. */
+const val MIN_SESSION_MS = 30_000L
+
 data class Config(
     val watched: Set<String>,
     val sessionMs: Long,
     val blockMs: Long,
     val resetMs: Long,
+    /** Most time allowed in watched apps per day, or 0 for no limit. */
+    val dailyLimitMs: Long = 0,
 )
+
+/** Why the block screen is showing. */
+enum class BlockReason {
+    /** Straight after pressing PANIC: celebrate. */
+    PANIC,
+    /** A watched app was opened during a PANIC block. */
+    REOPENED,
+    /** The daily limit is used up. */
+    DAILY_LIMIT,
+}
 
 /**
  * Everything that must survive the service being restarted.
@@ -34,6 +49,8 @@ data class EngineState(
     val blockLenMs: Long = 0,
     /** Continue presses since the last PANIC or fresh session. */
     val continuesInARow: Int = 0,
+    /** The current block is the daily limit, not a PANIC. */
+    val dailyLimitBlock: Boolean = false,
 ) {
     val block get() = Deadline(blockUntilElapsed, blockUntilWall, blockBoot, blockLenMs)
 
@@ -52,6 +69,8 @@ interface Clock {
     fun bootCount(): Int
     /** Today's date in the phone's time zone, as days since 1970-01-01. */
     fun localDay(): Long
+    /** Time left until midnight in the phone's time zone. */
+    fun msUntilNextDay(): Long
 }
 
 interface StateStore {
@@ -62,8 +81,7 @@ interface StateStore {
 interface EngineUi {
     fun showPrompt()
     fun hidePrompt()
-    /** [celebrate] is true right after PANIC, false when bouncing off a blocked app. */
-    fun showBlock(celebrate: Boolean)
+    fun showBlock(reason: BlockReason)
     fun hideBlock()
     fun goHome()
     fun scheduleTick(delayMs: Long)
@@ -71,10 +89,11 @@ interface EngineUi {
 }
 
 /**
- * Time spent in any watched app adds up to one shared session. When it reaches
- * [Config.sessionMs] the prompt is shown. Continue starts a fresh session; PANIC blocks
- * every watched app for [Config.blockMs]. Being away from watched apps for
- * [Config.resetMs] also starts a fresh session.
+ * Time spent in any watched app adds up to one shared session. When it reaches the session
+ * length the prompt is shown. Continue starts another, shorter session; PANIC blocks every
+ * watched app for [Config.blockMs]. Being away from watched apps for [Config.resetMs]
+ * starts a fresh, full-length session. Once [Config.dailyLimitMs] is used up, watched apps
+ * are blocked until midnight.
  */
 class SessionEngine(
     private val config: () -> Config,
@@ -109,6 +128,28 @@ class SessionEngine(
     /** Which Continue in a row the next one would be: 1 for the first. */
     val nextContinueNumber: Int get() = state.continuesInARow + 1
 
+    /** The current block is the daily limit, not a PANIC. */
+    val isDailyLimitBlock: Boolean get() = state.dailyLimitBlock && isBlocked
+
+    /** How long the session after the next Continue would be. */
+    val nextContinueSessionMs: Long get() = sessionMsFor(state.continuesInARow + 1)
+
+    /**
+     * Each Continue in a row buys less time: the full session, then two thirds, then a
+     * third from then on. Never under [MIN_SESSION_MS].
+     */
+    private fun sessionMsFor(continues: Int): Long =
+        (config().sessionMs * maxOf(1, 3 - continues) / 3).coerceAtLeast(MIN_SESSION_MS)
+
+    private val currentSessionMs: Long get() = sessionMsFor(state.continuesInARow)
+
+    /** Time left today under the daily limit, or null if there's no limit. */
+    fun dailyRemainingMs(): Long? {
+        val limit = config().dailyLimitMs.takeIf { it > 0 } ?: return null
+        val running = timingSince?.let { clock.elapsed() - it } ?: 0
+        return (limit - today.watchedMs - running).coerceAtLeast(0)
+    }
+
     /** Whether the next Continue needs the user's reason typed out. */
     val continueNeedsReason: Boolean get() = state.continuesInARow + 1 >= TYPE_REASON_ON_CONTINUE
 
@@ -134,7 +175,7 @@ class SessionEngine(
         if (isBlocked) {
             if (watched) {
                 ui.goHome()
-                ui.showBlock(celebrate = false)
+                ui.showBlock(if (state.dailyLimitBlock) BlockReason.DAILY_LIMIT else BlockReason.REOPENED)
             }
             return
         }
@@ -151,14 +192,19 @@ class SessionEngine(
             return
         }
         val since = timingSince ?: return
+        if (dailyRemainingMs() == 0L) {
+            stopTiming()
+            startDailyLimitBlock()
+            return
+        }
         val used = state.usedMs + (clock.elapsed() - since)
-        val sessionMs = config().sessionMs
+        val sessionMs = currentSessionMs
         if (used >= sessionMs) {
             stopTiming()
             promptShowing = true
             ui.showPrompt()
         } else {
-            ui.scheduleTick(sessionMs - used)
+            scheduleNextTick(sessionMs - used)
         }
     }
 
@@ -203,16 +249,45 @@ class SessionEngine(
             blockBoot = block.boot,
             blockLenMs = block.lenMs,
             continuesInARow = 0,
+            dailyLimitBlock = false,
         )
         store.save(state)
         updateStats { it.recordPanic(clock.localDay(), block.lenMs) }
         ui.goHome()
-        ui.showBlock(celebrate = true)
+        ui.showBlock(BlockReason.PANIC)
+        ui.scheduleTick(block.lenMs)
+    }
+
+    /** Blocks watched apps until midnight. No PANIC is recorded: this wasn't a choice. */
+    private fun startDailyLimitBlock() {
+        if (promptShowing) {
+            promptShowing = false
+            ui.hidePrompt()
+        }
+        val block = Deadline.start(clock, clock.msUntilNextDay())
+        state = state.copy(
+            usedMs = 0,
+            blockUntilElapsed = block.untilElapsed,
+            blockUntilWall = block.untilWall,
+            blockBoot = block.boot,
+            blockLenMs = block.lenMs,
+            continuesInARow = 0,
+            dailyLimitBlock = true,
+        )
+        store.save(state)
+        ui.goHome()
+        ui.showBlock(BlockReason.DAILY_LIMIT)
         ui.scheduleTick(block.lenMs)
     }
 
     private fun endBlock() {
-        state = state.copy(blockUntilElapsed = 0, blockUntilWall = 0, blockBoot = EngineState.UNKNOWN_BOOT, blockLenMs = 0)
+        state = state.copy(
+            blockUntilElapsed = 0,
+            blockUntilWall = 0,
+            blockBoot = EngineState.UNKNOWN_BOOT,
+            blockLenMs = 0,
+            dailyLimitBlock = false,
+        )
         store.save(state)
         ui.hideBlock()
         onForeground(currentPkg)
@@ -224,8 +299,18 @@ class SessionEngine(
         val sameBoot = state.lastActiveBoot == clock.bootCount()
         val idle = if (sameBoot) now - state.lastActiveElapsed else Long.MAX_VALUE
         if (idle >= config().resetMs) state = state.copy(usedMs = 0, continuesInARow = 0)
+        if (dailyRemainingMs() == 0L) {
+            startDailyLimitBlock()
+            return
+        }
         timingSince = now
-        ui.scheduleTick((config().sessionMs - state.usedMs).coerceAtLeast(0))
+        scheduleNextTick((currentSessionMs - state.usedMs).coerceAtLeast(0))
+    }
+
+    /** Ticks when the session runs out, or sooner if the daily limit runs out first. */
+    private fun scheduleNextTick(sessionLeftMs: Long) {
+        val dailyLeft = dailyRemainingMs() ?: Long.MAX_VALUE
+        ui.scheduleTick(minOf(sessionLeftMs, dailyLeft))
     }
 
     private fun stopTiming() {
@@ -267,4 +352,16 @@ fun formatDuration(ms: Long): String {
     val totalSeconds = (ms.coerceAtLeast(0) + 999) / 1000
     if (totalSeconds < 3600) return formatMmSs(ms)
     return "%d:%02d:%02d".format(totalSeconds / 3600, totalSeconds / 60 % 60, totalSeconds % 60)
+}
+
+/** "40 s", "2 min" or "6 min 40 s". */
+fun formatShort(ms: Long): String {
+    val totalSeconds = ms.coerceAtLeast(0) / 1000
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return when {
+        minutes == 0L -> "$seconds s"
+        seconds == 0L -> "$minutes min"
+        else -> "$minutes min $seconds s"
+    }
 }

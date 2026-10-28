@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import android.provider.Settings
 import java.time.LocalDate
+import java.time.ZoneId
 
 class Prefs(context: Context) : StateStore, StatsStore {
     private val sp = context.applicationContext.getSharedPreferences("jolt", Context.MODE_PRIVATE)
@@ -42,11 +43,30 @@ class Prefs(context: Context) : StateStore, StatsStore {
         get() = sp.getInt(KEY_PAUSE_SEC, DEFAULT_PAUSE_SECONDS)
         set(value) = sp.edit().putInt(KEY_PAUSE_SEC, value).apply()
 
+    var dailyLimitOn: Boolean
+        get() = sp.getBoolean(KEY_DAILY_ON, false)
+        set(value) = sp.edit().putBoolean(KEY_DAILY_ON, value).apply()
+
+    var dailyLimitMinutes: Int
+        get() = sp.getInt(KEY_DAILY_MIN, 30)
+        set(value) = sp.edit().putInt(KEY_DAILY_MIN, value).apply()
+
+    /** Watch every web browser, and newly installed social and video apps. */
+    var autoWatch: Boolean
+        get() = sp.getBoolean(KEY_AUTO_WATCH, true)
+        set(value) = sp.edit().putBoolean(KEY_AUTO_WATCH, value).apply()
+
+    /** Play the user's own videos with sound (quietly, and never on silent). */
+    var clipSound: Boolean
+        get() = sp.getBoolean(KEY_CLIP_SOUND, false)
+        set(value) = sp.edit().putBoolean(KEY_CLIP_SOUND, value).apply()
+
     fun config() = Config(
         watched = watched,
         sessionMs = sessionMinutes * MINUTE_MS,
         blockMs = blockMinutes * MINUTE_MS,
         resetMs = RESET_AFTER_BREAK_MS,
+        dailyLimitMs = if (dailyLimitOn) dailyLimitMinutes * MINUTE_MS else 0,
     )
 
     fun blockRemainingMs(clock: Clock): Long = load().blockRemainingMs(clock)
@@ -94,6 +114,7 @@ class Prefs(context: Context) : StateStore, StatsStore {
         blockBoot = sp.getInt("block_boot", EngineState.UNKNOWN_BOOT),
         blockLenMs = sp.getLong("block_len_ms", 0),
         continuesInARow = sp.getInt("continues_in_a_row", 0),
+        dailyLimitBlock = sp.getBoolean("daily_limit_block", false),
     )
 
     override fun save(state: EngineState) {
@@ -106,6 +127,7 @@ class Prefs(context: Context) : StateStore, StatsStore {
             .putInt("block_boot", state.blockBoot)
             .putLong("block_len_ms", state.blockLenMs)
             .putInt("continues_in_a_row", state.continuesInARow)
+            .putBoolean("daily_limit_block", state.dailyLimitBlock)
             .apply()
     }
 
@@ -116,6 +138,10 @@ class Prefs(context: Context) : StateStore, StatsStore {
         const val KEY_PAUSE_SEC = "pause_sec"
         const val KEY_BREATHING = "breathing"
         const val KEY_MATHS = "maths"
+        const val KEY_DAILY_ON = "daily_limit_on"
+        const val KEY_DAILY_MIN = "daily_limit_min"
+        const val KEY_AUTO_WATCH = "auto_watch"
+        const val KEY_CLIP_SOUND = "clip_sound"
         const val KEY_REASON = "reason"
         const val KEY_STATS = "stats"
     }
@@ -128,4 +154,8 @@ class AndroidClock(context: Context) : Clock {
     override fun wall() = System.currentTimeMillis()
     override fun bootCount() = Settings.Global.getInt(resolver, Settings.Global.BOOT_COUNT, EngineState.UNKNOWN_BOOT)
     override fun localDay() = LocalDate.now().toEpochDay()
+    override fun msUntilNextDay(): Long {
+        val midnight = LocalDate.now().plusDays(1).atStartOfDay(ZoneId.systemDefault())
+        return (midnight.toInstant().toEpochMilli() - System.currentTimeMillis()).coerceAtLeast(1000)
+    }
 }

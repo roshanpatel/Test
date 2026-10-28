@@ -37,6 +37,22 @@ Leaving the watched apps pauses the session timer, so dipping in and out doesn't
 break of 30 minutes or more, or the end of a block, gives you a fresh session. The browse time,
 block length and countdown can be changed on the main screen when no block is running.
 
+Each Continue in a row buys less time: the full browse time, then two thirds, then a third
+(never under 30 seconds). An optional daily limit blocks watched apps until midnight once it's
+used up, with no Continue at all.
+
+Getting round Jolt is harder too:
+
+- every web browser is watched automatically, including ones installed later, and so is any
+  newly installed social or video app;
+- during a block the Play Store and other app stores are blocked as well;
+- a guided setup turns on a family filter for the whole phone using Android's Private DNS
+  setting, and while settings are locked the Private DNS setting can't be changed.
+
+If you add your own clips, one plays on the time check during the countdown, in place of the
+breathing circle: a reminder of what this is for, right when you choose. Videos can optionally
+play with quiet sound (never on silent or vibrate).
+
 ## Lock settings
 
 Locking stops you loosening the rules in a weak moment. While locked you can still add apps,

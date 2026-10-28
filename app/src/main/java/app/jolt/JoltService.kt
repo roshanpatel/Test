@@ -48,6 +48,19 @@ class JoltService : AccessibilityService(), EngineUi {
     private var mathsLeftAt = 0L
     private var watchdogRunning = false
     private var receiverRegistered = false
+    private var webFilterCheckedAt = 0L
+    private var webFilterOn = false
+
+    /** Watches newly installed browsers, social and video apps straight away. */
+    private val packageReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)) return
+            val pkg = intent.data?.schemeSpecificPart ?: return
+            if (AutoWatch.onInstalled(this@JoltService, prefs, pkg)) {
+                Toast.makeText(this@JoltService, "Now watching ${AutoWatch.label(this@JoltService, pkg)}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -79,12 +92,16 @@ class JoltService : AccessibilityService(), EngineUi {
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_USER_PRESENT)
         }
+        val packages = IntentFilter(Intent.ACTION_PACKAGE_ADDED).apply { addDataScheme("package") }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            registerReceiver(packageReceiver, packages, Context.RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(screenReceiver, filter)
+            registerReceiver(packageReceiver, packages)
         }
         receiverRegistered = true
+        AutoWatch.sync(this, prefs)
 
         engine.start()
         ensureWatchdog()
@@ -104,7 +121,7 @@ class JoltService : AccessibilityService(), EngineUi {
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                if (blocked && watched && !isToast(cls)) {
+                if (blocked && (watched || isAppStore(pkg)) && !isToast(cls)) {
                     kickOut()
                     return
                 }
@@ -119,7 +136,7 @@ class JoltService : AccessibilityService(), EngineUi {
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
                 // Catches a watched app that opened without a window change we recognised
                 // (it fires constantly while scrolling), and Settings swapping pages in place.
-                val blockedApp = blocked && watched
+                val blockedApp = blocked && (watched || isAppStore(pkg))
                 if (!blockedApp && !(needsTextCheck(pkg) && guardActive())) return
                 val now = SystemClock.elapsedRealtime()
                 if (now - lastTamperCheck < TAMPER_CHECK_INTERVAL_MS) return
@@ -146,7 +163,7 @@ class JoltService : AccessibilityService(), EngineUi {
             return
         }
         if (blocked) {
-            if (pkg in prefs.watched) kickOut()
+            if (pkg in prefs.watched || isAppStore(pkg)) kickOut()
             return
         }
         if (pkg != lastActivityPkg) onAppOpened(pkg)
@@ -189,6 +206,9 @@ class JoltService : AccessibilityService(), EngineUi {
         }
     }
 
+    /** App stores are off limits during a block, so a way round can't be installed. */
+    private fun isAppStore(pkg: String) = pkg in APP_STORES
+
     private fun needsTextCheck(pkg: String) =
         pkg.contains("settings") || pkg.contains("packageinstaller") || pkg == PLAY_STORE
 
@@ -200,7 +220,19 @@ class JoltService : AccessibilityService(), EngineUi {
     private fun isTamperScreen(pkg: String, blocked: Boolean): Boolean {
         if (pkg.contains("packageinstaller")) return blocked || screenMentions(pkg, "uninstall")
         if (!needsTextCheck(pkg)) return false
+        // The Private DNS dialog, while the web filter is on: it can't be quietly switched off.
+        if (pkg.contains("settings") && isWebFilterOn() && screenMentions(pkg, "provider hostname")) return true
         return screenMentions(pkg, appLabel)
+    }
+
+    /** Cached, as this is checked on every Settings screen change. */
+    private fun isWebFilterOn(): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        if (now - webFilterCheckedAt > WEB_FILTER_CHECK_MS) {
+            webFilterCheckedAt = now
+            webFilterOn = WebFilter.activeHostname(this) != null
+        }
+        return webFilterOn
     }
 
     private fun screenMentions(pkg: String, text: String): Boolean {
@@ -212,7 +244,7 @@ class JoltService : AccessibilityService(), EngineUi {
     private fun kickOut() {
         performGlobalAction(GLOBAL_ACTION_HOME)
         if (engine.isBlocked) {
-            showBlock(celebrate = false)
+            showBlock(if (engine.isDailyLimitBlock) BlockReason.DAILY_LIMIT else BlockReason.REOPENED)
         } else {
             val now = SystemClock.elapsedRealtime()
             if (now - lastLockedNotice > LOCKED_NOTICE_INTERVAL_MS) {
@@ -228,14 +260,16 @@ class JoltService : AccessibilityService(), EngineUi {
     override fun showPrompt() {
         overlays.showPrompt(
             PromptInfo(
-                sessionMinutes = prefs.sessionMinutes,
+                continueMs = engine.nextContinueSessionMs,
                 pauseSeconds = prefs.pauseSeconds,
                 breathing = prefs.breathing,
                 reason = prefs.reason,
                 todayWatchedMs = engine.today.watchedMs,
+                dailyLeftMs = engine.dailyRemainingMs(),
                 needsReason = engine.continueNeedsReason,
                 maths = prefs.maths,
                 mathsLevel = engine.nextContinueNumber,
+                clipSound = prefs.clipSound,
             ),
             onContinue = { engine.onContinue() },
             onPanic = { engine.onPanic() },
@@ -245,10 +279,12 @@ class JoltService : AccessibilityService(), EngineUi {
 
     override fun hidePrompt() = overlays.hidePrompt()
 
-    override fun showBlock(celebrate: Boolean) {
+    override fun showBlock(reason: BlockReason) {
         overlays.showBlock(
             remainingMs = { engine.blockRemainingMs() },
-            celebration = if (celebrate) celebration() else null,
+            celebration = if (reason == BlockReason.PANIC) celebration() else null,
+            dailyLimit = reason == BlockReason.DAILY_LIMIT,
+            clipSound = prefs.clipSound,
             onDismiss = ::goHome,
         )
         ensureWatchdog()
@@ -301,13 +337,31 @@ class JoltService : AccessibilityService(), EngineUi {
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         if (::overlays.isInitialized) overlays.hideAll()
-        if (receiverRegistered) unregisterReceiver(screenReceiver)
+        if (receiverRegistered) {
+            unregisterReceiver(screenReceiver)
+            unregisterReceiver(packageReceiver)
+        }
         super.onDestroy()
     }
 
     private companion object {
         const val SYSTEM_UI = "com.android.systemui"
         const val PLAY_STORE = "com.android.vending"
+        val APP_STORES = setOf(
+            PLAY_STORE,
+            "com.sec.android.app.samsungapps", // Galaxy Store
+            "com.huawei.appmarket",
+            "com.xiaomi.market",
+            "com.xiaomi.mipicks",
+            "com.heytap.market", // Oppo / OnePlus
+            "com.oppo.market",
+            "com.bbk.appstore", // Vivo
+            "com.amazon.venezia",
+            "org.fdroid.fdroid",
+            "com.aurora.store",
+            "com.apkpure.aegon",
+        )
+        const val WEB_FILTER_CHECK_MS = 30_000L
         const val TAMPER_CHECK_INTERVAL_MS = 300L
         const val WATCHDOG_INTERVAL_MS = 2000L
         const val LOCKED_NOTICE_INTERVAL_MS = 3000L

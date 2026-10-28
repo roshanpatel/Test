@@ -29,6 +29,7 @@ class AppPickerActivity : Activity() {
     private var shown: List<AppEntry> = emptyList()
     private var query = ""
     private val adapter = Adapter()
+    private val browsers by lazy { AutoWatch.browsers(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -109,6 +110,10 @@ class AppPickerActivity : Activity() {
         }
         if (pkg in selected && !prefs.settledLock(clock).isOpen(clock)) {
             Toast.makeText(this, "Settings are locked: you can add apps but not remove them.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (pkg in selected && prefs.autoWatch && pkg in browsers) {
+            Toast.makeText(this, "Browsers are watched automatically. Turn that off on the main screen first.", Toast.LENGTH_LONG).show()
             return
         }
         if (!selected.remove(pkg)) selected.add(pkg)

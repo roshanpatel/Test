@@ -56,6 +56,10 @@ class MainActivity : Activity() {
     private var clipsLockedShown: Boolean? = null
     private lateinit var lockButton: Button
     private val steppers = mutableListOf<Stepper>()
+    private val strictSwitches = mutableListOf<StrictSwitch>()
+    private lateinit var clipSoundSwitch: Switch
+    private lateinit var filterStatus: TextView
+    private lateinit var filterButton: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -136,12 +140,30 @@ class MainActivity : Activity() {
             startActivity(Intent(this, AppPickerActivity::class.java))
         }
         column.addView(chooseApps, block(top = 8))
+        strictSwitches += StrictSwitch(
+            "Watch every web browser automatically, plus any new social or video app",
+            { prefs.autoWatch },
+            {
+                prefs.autoWatch = it
+                if (it) AutoWatch.sync(this, prefs)
+            },
+        )
+        column.addView(strictSwitches.last().view, block(top = 8))
 
         column.addView(section("Timings"))
         steppers += Stepper("Browse time before the check", 1, 1, 60, Stricter.LOWER, { prefs.sessionMinutes }, { prefs.sessionMinutes = it })
         steppers += Stepper("Block length after PANIC", 5, 5, 240, Stricter.HIGHER, { prefs.blockMinutes }, { prefs.blockMinutes = it })
         steppers += Stepper("Wait before Continue unlocks", 10, 10, 300, Stricter.HIGHER, { prefs.pauseSeconds }, { prefs.pauseSeconds = it }, unit = "s")
         steppers.forEach { column.addView(it.view, block(top = 8)) }
+        strictSwitches += StrictSwitch(
+            "Daily limit: once it's used up, watched apps are blocked until midnight, with no Continue",
+            { prefs.dailyLimitOn },
+            { prefs.dailyLimitOn = it },
+        )
+        column.addView(strictSwitches.last().view, block(top = 16))
+        val dailyStepper = Stepper("Daily limit", 10, 10, 240, Stricter.LOWER, { prefs.dailyLimitMinutes }, { prefs.dailyLimitMinutes = it })
+        steppers += dailyStepper
+        column.addView(dailyStepper.view, block(top = 8))
 
         column.addView(section("Time check"))
         breathingSwitch = Switch(this).apply {
@@ -209,6 +231,40 @@ class MainActivity : Activity() {
         column.addView(clipsList, block(top = 4))
         addClips = pillButton("Add GIFs, photos or videos", Palette.NEUTRAL) { pickClips() }
         column.addView(addClips, block(top = 8))
+        clipSoundSwitch = Switch(this).apply {
+            text = "Play sound on my videos (quietly; never on silent or vibrate)"
+            textSize = 15f
+            setTextColor(Palette.TEXT)
+            isChecked = prefs.clipSound
+            setOnCheckedChangeListener { _, checked -> prefs.clipSound = checked }
+        }
+        column.addView(clipSoundSwitch, block(top = 8))
+        column.addView(
+            label(
+                "Tip: record a 10-second video of yourself on a good day, talking to the you who's " +
+                    "about to keep scrolling. It plays on the time check, before you choose.",
+                13f,
+                Palette.MUTED,
+            ),
+            block(top = 8),
+        )
+
+        column.addView(section("Web filter (porn and gambling)"))
+        column.addView(
+            label(
+                "Android's Private DNS setting can block adult sites in every browser and app on the phone. " +
+                    "Jolt can't switch it on for you, but it walks you through it and, once settings are locked, " +
+                    "stops it being turned off. For gambling, also look at free self-exclusion tools such as " +
+                    "GamStop (UK), Gamban or BetBlocker.",
+                14f,
+                Palette.MUTED,
+            ),
+            block(top = 8),
+        )
+        filterStatus = label("", 15f, bold = true)
+        column.addView(filterStatus, block(top = 8))
+        filterButton = pillButton("Set up the filter", Palette.NEUTRAL) { setUpFilter() }
+        column.addView(filterButton, block(top = 8))
 
         lockedNote = label("", 14f, Palette.PANIC)
         column.addView(lockedNote, block(top = 16))
@@ -226,8 +282,29 @@ class MainActivity : Activity() {
         })
     }
 
+    private fun setUpFilter() {
+        AlertDialog.Builder(this)
+            .setTitle("Set up the web filter")
+            .setMessage(
+                "1. Tap \"Copy and open settings\". The filter's address (${WebFilter.HOSTNAME}) is copied for you.\n\n" +
+                    "2. Find Private DNS. It's usually under Network & internet (on Samsung: Connections → " +
+                    "More connection settings).\n\n" +
+                    "3. Choose \"Private DNS provider hostname\", paste the address, and tap Save.\n\n" +
+                    "Then come back here: Jolt will show the filter as on.",
+            )
+            .setPositiveButton("Copy and open settings") { _, _ ->
+                WebFilter.copyHostname(this)
+                WebFilter.openSettings(this)
+            }
+            .setNegativeButton("Not now", null)
+            .show()
+    }
+
     override fun onResume() {
         super.onResume()
+        AutoWatch.sync(this, prefs).forEach {
+            Toast.makeText(this, "Now watching ${AutoWatch.label(this, it)}", Toast.LENGTH_SHORT).show()
+        }
         handler.post(refresher)
     }
 
@@ -246,7 +323,7 @@ class MainActivity : Activity() {
         val locked = !lock.isOpen(clock)
 
         when {
-            blocked -> status("BLOCKED: ${formatMmSs(blockLeft)} left", Palette.PANIC)
+            blocked -> status("BLOCKED: ${formatDuration(blockLeft)} left", Palette.PANIC)
             !serviceOn -> status("Not running yet. Turn on the accessibility service below.", Palette.ACCENT)
             watched.isEmpty() -> status("Running. Choose which apps to watch.", Palette.ACCENT)
             else -> status(
@@ -285,6 +362,18 @@ class MainActivity : Activity() {
 
         if (breathingSwitch.isChecked != prefs.breathing) breathingSwitch.isChecked = prefs.breathing
         if (mathsSwitch.isChecked != prefs.maths) mathsSwitch.isChecked = prefs.maths
+        if (clipSoundSwitch.isChecked != prefs.clipSound) clipSoundSwitch.isChecked = prefs.clipSound
+        strictSwitches.forEach { it.update() }
+
+        val filterHost = WebFilter.activeHostname(this)
+        if (filterHost != null) {
+            filterStatus.text = "✓ Private DNS is on: $filterHost"
+            filterStatus.setTextColor(Palette.GOOD)
+        } else {
+            filterStatus.text = "✗ Not set up"
+            filterStatus.setTextColor(Palette.MUTED)
+        }
+        filterButton.visibility = if (filterHost == null) View.VISIBLE else View.GONE
         val canEditReason = !blocked && !locked
         reasonInput.isEnabled = canEditReason
         saveReason.isEnabled = canEditReason
@@ -347,6 +436,26 @@ class MainActivity : Activity() {
     }
 
     private fun isBlocked() = prefs.blockRemainingMs(clock) > 0
+
+    private fun isLoosenAllowed() = !isBlocked() && prefs.settledLock(clock).isOpen(clock)
+
+    /** An on/off setting where "on" is stricter: while locked or blocked it can only be switched on. */
+    private inner class StrictSwitch(text: String, private val get: () -> Boolean, private val set: (Boolean) -> Unit) {
+        val view = Switch(this@MainActivity).apply {
+            this.text = text
+            textSize = 15f
+            setTextColor(Palette.TEXT)
+            isChecked = get()
+            setOnCheckedChangeListener { button, checked ->
+                if (checked == get()) return@setOnCheckedChangeListener
+                if (!checked && !isLoosenAllowed()) button.isChecked = true else set(checked)
+            }
+        }
+
+        fun update() {
+            if (view.isChecked != get()) view.isChecked = get()
+        }
+    }
 
     private fun pickClips() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {

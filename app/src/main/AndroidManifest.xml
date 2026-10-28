@@ -4,6 +4,8 @@
 
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Reads whether the Private DNS web filter is on. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Needed to list installed apps and to tell real app screens apart from
          pop-ups. Fine for personal installs; Play review would require a declaration. -->
     <uses-permission

@@ -15,7 +15,8 @@ class SessionEngineTest {
         override fun elapsed() = elapsed
         override fun wall() = wall
         override fun bootCount() = boot
-        override fun localDay() = wall / (24 * 60 * MINUTE_MS)
+        override fun localDay() = wall / DAY_MS
+        override fun msUntilNextDay() = DAY_MS - wall % DAY_MS
 
         fun advance(ms: Long) {
             elapsed += ms
@@ -42,7 +43,13 @@ class SessionEngineTest {
 
         override fun showPrompt() { calls += "showPrompt" }
         override fun hidePrompt() { calls += "hidePrompt" }
-        override fun showBlock(celebrate: Boolean) { calls += if (celebrate) "celebrate" else "showBlock" }
+        override fun showBlock(reason: BlockReason) {
+            calls += when (reason) {
+                BlockReason.PANIC -> "celebrate"
+                BlockReason.REOPENED -> "showBlock"
+                BlockReason.DAILY_LIMIT -> "dailyLimit"
+            }
+        }
         override fun hideBlock() { calls += "hideBlock" }
         override fun goHome() { calls += "goHome" }
         override fun scheduleTick(delayMs: Long) { tickDelay = delayMs }
@@ -141,14 +148,43 @@ class SessionEngineTest {
     }
 
     @Test
-    fun continue_gives_another_full_session() {
+    fun each_continue_buys_less_time() {
+        engine.onForeground(FACEBOOK)
+        runFor(3 * MINUTE_MS)
+        assertEquals(2 * MINUTE_MS, engine.nextContinueSessionMs)
+        engine.onContinue()
+        assertFalse(engine.promptShowing)
+        assertEquals(2 * MINUTE_MS, ui.tickDelay)
+        runFor(2 * MINUTE_MS)
+        assertTrue(engine.promptShowing)
+        engine.onContinue()
+        assertEquals(MINUTE_MS, ui.tickDelay)
+        runFor(MINUTE_MS)
+        engine.onContinue()
+        assertEquals("never shorter than a third", MINUTE_MS, ui.tickDelay)
+    }
+
+    @Test
+    fun session_never_shorter_than_minimum() {
+        val short = SessionEngine({ config.copy(sessionMs = MINUTE_MS) }, clock, store, store, ui)
+        engine = short
+        short.onForeground(FACEBOOK)
+        runFor(MINUTE_MS)
+        short.onContinue()
+        runFor(40_000)
+        short.onContinue()
+        assertEquals(MIN_SESSION_MS, ui.tickDelay)
+    }
+
+    @Test
+    fun long_break_restores_full_session() {
         engine.onForeground(FACEBOOK)
         runFor(3 * MINUTE_MS)
         engine.onContinue()
-        assertFalse(engine.promptShowing)
+        engine.onForeground(MAPS)
+        runFor(30 * MINUTE_MS)
+        engine.onForeground(FACEBOOK)
         assertEquals(3 * MINUTE_MS, ui.tickDelay)
-        runFor(3 * MINUTE_MS)
-        assertTrue(engine.promptShowing)
     }
 
     @Test
@@ -336,11 +372,11 @@ class SessionEngineTest {
         engine.onForeground(FACEBOOK)
         runFor(3 * MINUTE_MS)
         engine.onContinue()
-        runFor(3 * MINUTE_MS)
+        runFor(2 * MINUTE_MS)
         engine.onPanic()
 
         val today = engine.today
-        assertEquals(6 * MINUTE_MS, today.watchedMs)
+        assertEquals(5 * MINUTE_MS, today.watchedMs)
         assertEquals(1, today.continues)
         assertEquals(1, today.panics)
         assertEquals(1, engine.stats.totalPanics)
@@ -488,6 +524,68 @@ class SessionEngineTest {
         assertEquals(2, engine.nextContinueNumber)
     }
 
+    private fun limitedEngine(limitMs: Long) =
+        SessionEngine({ config.copy(dailyLimitMs = limitMs) }, clock, store, store, ui)
+
+    @Test
+    fun daily_limit_blocks_until_midnight_with_no_prompt() {
+        clock.wall = 10 * DAY_MS + 20 * 60 * MINUTE_MS // 20:00
+        val limited = limitedEngine(2 * MINUTE_MS)
+        limited.onForeground(FACEBOOK)
+        assertEquals("ticks when the limit runs out, before the session", 2 * MINUTE_MS, ui.tickDelay)
+        engine = limited
+        runFor(2 * MINUTE_MS)
+        assertFalse(limited.promptShowing)
+        assertTrue(limited.isDailyLimitBlock)
+        assertEquals(listOf("goHome", "dailyLimit"), ui.calls)
+        assertEquals(4 * 60 * MINUTE_MS - 2 * MINUTE_MS, limited.blockRemainingMs())
+        assertEquals("not a PANIC", 0, limited.stats.totalPanics)
+
+        ui.calls.clear()
+        limited.onForeground(CHROME)
+        assertEquals(listOf("goHome", "dailyLimit"), ui.calls)
+    }
+
+    @Test
+    fun daily_limit_counts_across_sessions_and_resets_next_day() {
+        clock.wall = 10 * DAY_MS + 23 * 60 * MINUTE_MS // 23:00
+        val limited = limitedEngine(4 * MINUTE_MS)
+        engine = limited
+        limited.onForeground(FACEBOOK)
+        runFor(3 * MINUTE_MS)
+        limited.onContinue()
+        assertEquals(MINUTE_MS, ui.tickDelay)
+        runFor(MINUTE_MS)
+        assertTrue(limited.isDailyLimitBlock)
+
+        runFor(56 * MINUTE_MS) // to midnight
+        assertFalse("open again after midnight", limited.isBlocked)
+        assertTrue("still on Facebook, so a fresh session starts", limited.isTiming)
+        assertEquals(3 * MINUTE_MS, ui.tickDelay)
+    }
+
+    @Test
+    fun opening_app_after_limit_used_blocks_straight_away() {
+        clock.wall = 10 * DAY_MS
+        store.stats = Stats().addWatched(10, 30 * MINUTE_MS)
+        val limited = limitedEngine(30 * MINUTE_MS)
+        limited.onForeground(FACEBOOK)
+        assertTrue(limited.isDailyLimitBlock)
+        assertEquals(0L, limited.dailyRemainingMs())
+    }
+
+    @Test
+    fun no_daily_limit_by_default() {
+        assertEquals(null, engine.dailyRemainingMs())
+    }
+
+    @Test
+    fun formats_short_durations() {
+        assertEquals("40 s", formatShort(40_000))
+        assertEquals("2 min", formatShort(2 * MINUTE_MS))
+        assertEquals("6 min 40 s", formatShort(400_000))
+    }
+
     @Test
     fun remembers_continues_before_panic() {
         engine.onForeground(FACEBOOK)
@@ -600,6 +698,7 @@ class SessionEngineTest {
     }
 
     private companion object {
+        const val DAY_MS = 24 * 60 * MINUTE_MS
         const val FACEBOOK = "com.facebook.katana"
         const val CHROME = "com.android.chrome"
         const val MAPS = "com.google.android.apps.maps"

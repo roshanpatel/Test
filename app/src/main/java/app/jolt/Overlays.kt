@@ -12,6 +12,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.AnimatedImageDrawable
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -48,7 +49,8 @@ import kotlin.random.Random
 
 /** What the time check shows, gathered by the service. */
 class PromptInfo(
-    val sessionMinutes: Int,
+    /** Length of the session Continue would buy. */
+    val continueMs: Long,
     val pauseSeconds: Int,
     val breathing: Boolean,
     val reason: String,
@@ -57,6 +59,9 @@ class PromptInfo(
     val maths: Boolean,
     /** 1 for the first Continue in a row, rising with each one. */
     val mathsLevel: Int,
+    /** Time left under the daily limit, or null if there's no limit. */
+    val dailyLeftMs: Long?,
+    val clipSound: Boolean,
 )
 
 /** What the block screen celebrates right after PANIC. */
@@ -88,6 +93,9 @@ class Overlays(private val service: AccessibilityService) {
     private var blockView: View? = null
     private var blockTicker: Runnable? = null
     private var video: VideoView? = null
+    private var promptVideo: VideoView? = null
+    /** The clip shown last, so the next one is different. */
+    private var lastClip: String? = null
     private var jabView: View? = null
 
     /** The maths question is on screen, waiting for an answer. */
@@ -193,7 +201,7 @@ class Overlays(private val service: AccessibilityService) {
                 secondsLeft > 0 -> "Continue browsing (in ${formatSeconds(secondsLeft)})"
                 !mathsSolved -> "Solve the sum to continue"
                 !unlocked -> "Type your reason to continue"
-                else -> "Continue browsing (+${info.sessionMinutes} min)"
+                else -> "Continue browsing (+${formatShort(info.continueMs)})"
             }
         }
         // Anything that adds several characters at once (paste, autofill, a keyboard
@@ -215,6 +223,7 @@ class Overlays(private val service: AccessibilityService) {
         })
         updateContinue()
 
+        var clipFrame: View? = null
         val card = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = ctx.rounded(Palette.CARD, 24)
@@ -225,19 +234,25 @@ class Overlays(private val service: AccessibilityService) {
             }
             addView(
                 ctx.label(
-                    "That's ${info.sessionMinutes} ${minutes(info.sessionMinutes)}. " +
-                        "Today so far: ${formatHoursMinutes(info.todayWatchedMs)} in these apps.",
+                    "Today so far: ${formatHoursMinutes(info.todayWatchedMs)} in these apps." +
+                        (info.dailyLeftMs?.let { " ${formatHoursMinutes(it)} left of today's limit." } ?: ""),
                     16f,
                     Palette.MUTED,
                 ),
                 spaced(ctx, top = 8),
             )
-            if (info.breathing) {
+            // Your own clip, if you've added any: a reminder of what this is for, right at the
+            // moment of choosing. It takes the breathing circle's place.
+            val clip = pickClip(ctx)?.let { clipView(ctx, it, info.clipSound) { v -> promptVideo = v } }
+            if (clip != null) {
+                clipFrame = clip
+                addView(clip, LinearLayout.LayoutParams(MATCH_PARENT, ctx.dp(PROMPT_CLIP_DP)).apply { topMargin = ctx.dp(12) })
+            } else if (info.breathing) {
                 val breath = BreathingView(ctx)
                 breathingView = breath
                 addView(breath, LinearLayout.LayoutParams(MATCH_PARENT, ctx.dp(170)).apply { topMargin = ctx.dp(12) })
             }
-            addView(countdown, spaced(ctx, top = if (info.breathing) 4 else 12))
+            addView(countdown, spaced(ctx, top = if (clipFrame != null || info.breathing) 4 else 12))
             addView(hintLabel, spaced(ctx, top = 0))
             addView(
                 ctx.pillButton("PANIC BUTTON!", Palette.PANIC) { decide(onPanic) }.apply { textSize = 22f; minHeight = ctx.dp(72) },
@@ -277,6 +292,10 @@ class Overlays(private val service: AccessibilityService) {
         fun showStep(step: View, input: EditText) {
             breathingView?.stop()
             breathingView?.visibility = View.GONE
+            // The clip stays, just smaller, to make room for the keyboard.
+            clipFrame?.layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, ctx.dp(PROMPT_CLIP_SMALL_DP)).apply {
+                topMargin = ctx.dp(12)
+            }
             card.removeView(step)
             card.removeView(continueButton)
             card.addView(step, 1, spaced(ctx, top = 12))
@@ -350,6 +369,8 @@ class Overlays(private val service: AccessibilityService) {
 
     fun hidePrompt() {
         mathsShowing = false
+        promptVideo?.stopPlayback()
+        promptVideo = null
         promptTicker?.let(handler::removeCallbacks)
         promptTicker = null
         breathingView?.stop()
@@ -358,11 +379,17 @@ class Overlays(private val service: AccessibilityService) {
         promptView = null
     }
 
-    fun showBlock(remainingMs: () -> Long, celebration: Celebration?, onDismiss: () -> Unit) {
+    fun showBlock(
+        remainingMs: () -> Long,
+        celebration: Celebration?,
+        dailyLimit: Boolean,
+        clipSound: Boolean,
+        onDismiss: () -> Unit,
+    ) {
         if (blockView != null) return
         val ctx: Context = service
 
-        val countdown = ctx.label(formatMmSs(remainingMs()), 56f, Palette.PANIC, bold = true).apply {
+        val countdown = ctx.label(formatDuration(remainingMs()), 56f, Palette.PANIC, bold = true).apply {
             gravity = Gravity.CENTER
         }
 
@@ -375,7 +402,7 @@ class Overlays(private val service: AccessibilityService) {
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(ctx.dp(28), ctx.dp(16), ctx.dp(28), ctx.dp(16))
             if (celebration != null) {
-                addView(inspiration(ctx), LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f).apply { bottomMargin = ctx.dp(12) })
+                addView(inspiration(ctx, clipSound), LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f).apply { bottomMargin = ctx.dp(12) })
                 addView(centered("🎉 Well done!", 30f, Palette.GOOD, bold = true))
                 addView(centered("That's PANIC #${celebration.panicNumber}. ${celebration.praise}", 17f), spaced(ctx, top = 6))
                 celebration.milestones.forEach {
@@ -387,6 +414,14 @@ class Overlays(private val service: AccessibilityService) {
                 celebration.timeBack?.let { addView(centered("⏳ $it", 14f, Palette.MUTED), spaced(ctx, top = 4)) }
                 celebration.nextMilestone?.let { addView(centered("🏆 $it", 14f, Palette.MUTED), spaced(ctx, top = 4)) }
                 addView(centered("Your watched apps are locked for", 15f, Palette.MUTED), spaced(ctx, top = 16))
+                countdown.textSize = 44f
+            } else if (dailyLimit) {
+                addView(View(ctx), LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+                addView(centered("That's today's time", 30f, bold = true))
+                addView(
+                    centered("You've used your daily limit in watched apps. They open again at midnight, in", 17f, Palette.MUTED),
+                    spaced(ctx, top = 8),
+                )
                 countdown.textSize = 44f
             } else {
                 addView(View(ctx), LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
@@ -422,7 +457,7 @@ class Overlays(private val service: AccessibilityService) {
                 if (left <= 0) {
                     hideBlock()
                 } else {
-                    countdown.text = formatMmSs(left)
+                    countdown.text = formatDuration(left)
                     handler.postDelayed(this, 1000)
                 }
             }
@@ -441,8 +476,8 @@ class Overlays(private val service: AccessibilityService) {
     }
 
     /** One of the user's own clips if they've added any, otherwise a built-in animation. */
-    private fun inspiration(ctx: Context): View {
-        Clips(ctx).random()?.let { clip -> clipView(ctx, clip)?.let { return it } }
+    private fun inspiration(ctx: Context, sound: Boolean): View {
+        pickClip(ctx)?.let { clip -> clipView(ctx, clip, sound) { video = it }?.let { return it } }
         val scene = Scene.entries.random()
         return LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
@@ -451,20 +486,36 @@ class Overlays(private val service: AccessibilityService) {
         }
     }
 
-    private fun clipView(ctx: Context, file: File): View? = try {
+    /** A random clip, avoiding the one shown last time when there's a choice. */
+    private fun pickClip(ctx: Context): File? {
+        val all = Clips(ctx).list()
+        val pick = all.filter { it.name != lastClip }.randomOrNull() ?: all.randomOrNull()
+        lastClip = pick?.name
+        return pick
+    }
+
+    /**
+     * Shows a photo, GIF or video. Videos loop, muted unless [sound] is on and the phone
+     * isn't on silent or vibrate; even then they play quietly.
+     */
+    private fun clipView(ctx: Context, file: File, sound: Boolean, onVideo: (VideoView) -> Unit): View? = try {
         val media: View = if (Clips.isVideo(file)) {
+            val ringerNormal = (ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager).ringerMode == AudioManager.RINGER_MODE_NORMAL
+            val volume = if (sound && ringerNormal) CLIP_VOLUME else 0f
             VideoView(ctx).apply {
                 setVideoPath(file.path)
                 setOnPreparedListener {
                     it.isLooping = true
-                    it.setVolume(0f, 0f)
+                    it.setVolume(volume, volume)
                     start()
                 }
                 setOnErrorListener { _, _, _ ->
                     visibility = View.GONE
                     true
                 }
-                video = this
+                // Don't steal audio focus (pausing music) when silent anyway.
+                if (volume == 0f && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) setAudioFocusRequest(AudioManager.AUDIOFOCUS_NONE)
+                onVideo(this)
             }
         } else {
             ImageView(ctx).apply {
@@ -731,6 +782,9 @@ class Overlays(private val service: AccessibilityService) {
     private companion object {
         const val DEFAULT_REASON = "I choose to keep scrolling"
         const val MAX_IMAGE_PX = 1080
+        const val PROMPT_CLIP_DP = 190
+        const val PROMPT_CLIP_SMALL_DP = 110
+        const val CLIP_VOLUME = 0.4f
         const val MAX_CHARS_PER_KEYSTROKE = 2
         const val JAB_MS = 3500L
 
