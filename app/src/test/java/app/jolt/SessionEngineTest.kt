@@ -17,6 +17,8 @@ class SessionEngineTest {
         override fun bootCount() = boot
         override fun localDay() = wall / DAY_MS
         override fun msUntilNextDay() = DAY_MS - wall % DAY_MS
+        override fun localMinute() = wall / MINUTE_MS
+        override fun msIntoMinute() = wall % MINUTE_MS
 
         fun advance(ms: Long) {
             elapsed += ms
@@ -48,6 +50,7 @@ class SessionEngineTest {
                 BlockReason.PANIC -> "celebrate"
                 BlockReason.REOPENED -> "showBlock"
                 BlockReason.DAILY_LIMIT -> "dailyLimit"
+                BlockReason.SCHEDULED -> "scheduled"
             }
         }
         override fun hideBlock() { calls += "hideBlock" }
@@ -473,47 +476,6 @@ class SessionEngineTest {
         assertEquals(1f, milestoneProgress(5000), 0.001f)
     }
 
-    /** Works out "a op b" or "a × b + c" the slow way, to check the generator's answers. */
-    private fun evaluate(question: String): Int {
-        val t = question.split(" ")
-        fun apply(x: Int, op: String, y: Int) = when (op) {
-            "+" -> x + y
-            "−" -> x - y
-            "×" -> x * y
-            else -> error(op)
-        }
-        val first = apply(t[0].toInt(), t[1], t[2].toInt())
-        return if (t.size == 5) apply(first, t[3], t[4].toInt()) else first
-    }
-
-    @Test
-    fun maths_answers_are_right_and_never_negative() {
-        val random = kotlin.random.Random(42)
-        for (level in 1..8) repeat(200) {
-            val p = mathProblem(level, random)
-            assertEquals(p.question, evaluate(p.question), p.answer)
-            assertTrue(p.question, p.answer >= 0)
-        }
-    }
-
-    @Test
-    fun maths_gets_harder_with_level() {
-        val random = kotlin.random.Random(7)
-        fun hardest(level: Int) = (1..200).maxOf { mathProblem(level, random).answer }
-        fun easiest(level: Int) = (1..200).minOf { mathProblem(level, random).answer }
-        assertTrue(hardest(1) <= 18)
-        assertTrue(easiest(5) >= 12 * 11)
-        assertTrue(easiest(6) > hardest(3))
-        assertEquals(mathProblem(6, kotlin.random.Random(1)), mathProblem(99, kotlin.random.Random(1)))
-    }
-
-    @Test
-    fun recognises_calculators() {
-        assertTrue(isCalculator("com.google.android.calculator"))
-        assertTrue(isCalculator("com.sec.android.app.popupcalculator"))
-        assertFalse(isCalculator("com.android.chrome"))
-    }
-
     @Test
     fun maths_level_rises_with_each_continue() {
         engine.onForeground(FACEBOOK)
@@ -584,6 +546,122 @@ class SessionEngineTest {
         assertEquals("40 s", formatShort(40_000))
         assertEquals("2 min", formatShort(2 * MINUTE_MS))
         assertEquals("6 min 40 s", formatShort(400_000))
+    }
+
+    // Schedule: check-in at 06:00, blocked 16:30-09:00 on days out (the user's own setup).
+
+    private fun at(day: Long, hour: Int, minute: Int = 0) = (day * MINUTES_PER_DAY) + hour * 60 + minute
+
+    private val schedule = Schedule()
+
+    @Test
+    fun unanswered_day_counts_as_home_day() {
+        assertTrue(schedule.blockedAt(at(10, 12)))
+        assertEquals(DayPlan.HOME, schedule.planAt(at(10, 12)))
+    }
+
+    @Test
+    fun out_day_opens_between_blocked_hours() {
+        val out = schedule.answer(at(10, 6, 5), DayPlan.OUT)!!
+        assertTrue(out.blockedAt(at(10, 8, 59)))
+        assertFalse(out.blockedAt(at(10, 9, 0)))
+        assertFalse(out.blockedAt(at(10, 16, 29)))
+        assertTrue(out.blockedAt(at(10, 16, 30)))
+        assertTrue(out.blockedAt(at(10, 23, 0)))
+        assertTrue("next day, unanswered again", out.blockedAt(at(11, 12)))
+    }
+
+    @Test
+    fun answer_before_check_in_belongs_to_previous_day() {
+        val out = schedule.answer(at(10, 6), DayPlan.OUT)!!
+        assertEquals(DayPlan.OUT, out.answerAt(at(11, 5, 59)))
+        assertEquals(null, out.answerAt(at(11, 6)))
+    }
+
+    @Test
+    fun home_day_is_final_but_out_can_become_home() {
+        val home = schedule.answer(at(10, 7), DayPlan.HOME)!!
+        assertEquals(null, home.answer(at(10, 8), DayPlan.OUT))
+        val out = schedule.answer(at(10, 7), DayPlan.OUT)!!
+        assertEquals(DayPlan.HOME, out.answer(at(10, 12), DayPlan.HOME)!!.planAt(at(10, 12)))
+    }
+
+    @Test
+    fun block_ends_at_window_end_or_check_in() {
+        val out = schedule.answer(at(10, 7), DayPlan.OUT)!!
+        assertEquals(2 * MINUTE_MS, out.blockMsLeft(at(10, 8, 58), 0))
+        assertEquals(0L, out.blockMsLeft(at(10, 12), 0))
+        assertEquals("stops at the next check-in", 7 * 60 * MINUTE_MS, out.blockMsLeft(at(10, 23), 0))
+        assertEquals(30 * MINUTE_MS - 20_000, out.msUntilBlock(at(10, 16), 20_000))
+        val home = schedule.answer(at(10, 7), DayPlan.HOME)!!
+        assertEquals("07:00 to the next 06:00", 23 * 60 * MINUTE_MS, home.blockMsLeft(at(10, 7), 0))
+    }
+
+    @Test
+    fun schedule_off_blocks_nothing() {
+        assertFalse(schedule.copy(on = false).blockedAt(at(10, 12)))
+        assertEquals(null, schedule.copy(on = false).msUntilBlock(at(10, 12), 0))
+    }
+
+    @Test
+    fun windows_survive_encoding() {
+        assertEquals(Schedule.DEFAULT_WINDOWS, Schedule.decodeWindows(Schedule.encodeWindows(Schedule.DEFAULT_WINDOWS)))
+        assertEquals(emptyList<TimeWindow>(), Schedule.decodeWindows(""))
+        assertEquals(Schedule.DEFAULT_WINDOWS, Schedule.decodeWindows(null))
+        assertEquals("19:00 – 09:00", TimeWindow(19 * 60, 9 * 60).label)
+    }
+
+    /** An engine whose config follows [sched] at the fake clock's current time. */
+    private fun scheduledEngine(sched: () -> Schedule) = SessionEngine(
+        {
+            val s = sched()
+            config.copy(
+                scheduleBlockMs = s.blockMsLeft(clock.localMinute(), clock.msIntoMinute()),
+                msUntilScheduledBlock = s.msUntilBlock(clock.localMinute(), clock.msIntoMinute()),
+            )
+        },
+        clock, store, store, ui,
+    )
+
+    @Test
+    fun scheduled_block_starts_mid_session_and_ends_on_time() {
+        clock.wall = 10 * DAY_MS + 16 * 60 * MINUTE_MS + 29 * MINUTE_MS // 16:29
+        val out = schedule.answer(at(10, 7), DayPlan.OUT)!!
+        engine = scheduledEngine { out }
+        engine.onForeground(FACEBOOK)
+        assertEquals("ticks when the blocked hours start", MINUTE_MS, ui.tickDelay)
+        runFor(MINUTE_MS)
+        assertEquals(listOf("goHome", "scheduled"), ui.calls)
+        assertTrue(engine.isBlocked)
+        assertEquals(BlockReason.SCHEDULED, engine.blockReason)
+
+        ui.calls.clear()
+        engine.onForeground(CHROME)
+        assertEquals(listOf("goHome", "scheduled"), ui.calls)
+    }
+
+    @Test
+    fun answering_home_mid_session_blocks_at_next_checkpoint() {
+        clock.wall = 10 * DAY_MS + 12 * 60 * MINUTE_MS // 12:00
+        var current = schedule.answer(at(10, 7), DayPlan.OUT)!!
+        engine = scheduledEngine { current }
+        engine.onForeground(FACEBOOK)
+        clock.advance(20_000)
+        current = current.answer(clock.localMinute(), DayPlan.HOME)!!
+        engine.checkpoint()
+        assertTrue(engine.isBlocked)
+        assertEquals(listOf("goHome", "scheduled"), ui.calls)
+    }
+
+    @Test
+    fun panic_block_takes_priority_over_schedule_reason() {
+        clock.wall = 10 * DAY_MS + 12 * 60 * MINUTE_MS
+        val out = schedule.answer(at(10, 7), DayPlan.OUT)!!
+        engine = scheduledEngine { out }
+        engine.onForeground(FACEBOOK)
+        runFor(3 * MINUTE_MS)
+        engine.onPanic()
+        assertEquals(BlockReason.REOPENED, engine.blockReason)
     }
 
     @Test

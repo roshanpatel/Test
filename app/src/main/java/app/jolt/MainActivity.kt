@@ -1,10 +1,14 @@
 package app.jolt
 
 import android.app.Activity
+import android.Manifest
 import android.app.AlertDialog
+import android.app.TimePickerDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -45,7 +49,13 @@ class MainActivity : Activity() {
     private lateinit var milestoneBar: ProgressBar
     private lateinit var milestoneText: TextView
     private lateinit var breathingSwitch: Switch
-    private lateinit var mathsSwitch: Switch
+    private lateinit var todayPlan: TextView
+    private lateinit var homeButton: Button
+    private lateinit var outButton: Button
+    private lateinit var checkInButton: Button
+    private lateinit var windowsList: LinearLayout
+    private lateinit var addWindowButton: Button
+    private var windowsShownFor: Pair<List<TimeWindow>, Boolean>? = null
     private lateinit var reasonInput: EditText
     private lateinit var saveReason: Button
     private lateinit var clips: Clips
@@ -66,6 +76,11 @@ class MainActivity : Activity() {
         prefs = Prefs(this)
         clock = AndroidClock(this)
         clips = Clips(this)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
+        }
 
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -150,6 +165,42 @@ class MainActivity : Activity() {
         )
         column.addView(strictSwitches.last().view, block(top = 8))
 
+        column.addView(section("Morning check-in"))
+        column.addView(
+            label(
+                "Each morning Jolt asks: working from home today? Yes keeps watched apps off all day. " +
+                    "No means the blocked hours below apply. No answer counts as a home day.",
+                14f,
+                Palette.MUTED,
+            ),
+            block(top = 8),
+        )
+        strictSwitches += StrictSwitch(
+            "Morning check-in and blocked hours",
+            { prefs.schedule.on },
+            {
+                prefs.schedule = prefs.schedule.copy(on = it)
+                CheckIn.scheduleNext(this)
+            },
+        )
+        column.addView(strictSwitches.last().view, block(top = 8))
+        todayPlan = label("", 15f, bold = true).apply {
+            background = rounded(Palette.CARD)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+        }
+        column.addView(todayPlan, block(top = 8))
+        homeButton = pillButton("🏠 Working from home today", Palette.NEUTRAL) { answerToday(DayPlan.HOME) }
+        outButton = pillButton("🚶 I'm out today", Palette.NEUTRAL) { answerToday(DayPlan.OUT) }
+        column.addView(homeButton, block(top = 8))
+        column.addView(outButton, block(top = 8))
+        checkInButton = pillButton("", Palette.NEUTRAL) { pickCheckInTime() }
+        column.addView(checkInButton, block(top = 16))
+        column.addView(label("Blocked hours on days you're out", 15f, bold = true), block(top = 16))
+        windowsList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        column.addView(windowsList, block(top = 4))
+        addWindowButton = pillButton("Add blocked hours", Palette.NEUTRAL) { pickWindow() }
+        column.addView(addWindowButton, block(top = 8))
+
         column.addView(section("Timings"))
         steppers += Stepper("Browse time before the check", 1, 1, 60, Stricter.LOWER, { prefs.sessionMinutes }, { prefs.sessionMinutes = it })
         steppers += Stepper("Block length after PANIC", 5, 5, 240, Stricter.HIGHER, { prefs.blockMinutes }, { prefs.blockMinutes = it })
@@ -182,22 +233,6 @@ class MainActivity : Activity() {
             }
         }
         column.addView(breathingSwitch, block(top = 8))
-        mathsSwitch = Switch(this).apply {
-            text = "Maths question before Continue (harder each time)"
-            textSize = 15f
-            setTextColor(Palette.TEXT)
-            isChecked = prefs.maths
-            setOnCheckedChangeListener { button, checked ->
-                if (checked == prefs.maths) return@setOnCheckedChangeListener
-                val lock = prefs.settledLock(clock)
-                if (!checked && (isBlocked() || !lock.isOpen(clock))) {
-                    button.isChecked = true // turning it off loosens the rules
-                } else {
-                    prefs.maths = checked
-                }
-            }
-        }
-        column.addView(mathsSwitch, block(top = 8))
         column.addView(
             label(
                 "Your reason. It's shown on every time check, and from the $TYPE_REASON_ON_CONTINUE" +
@@ -300,8 +335,81 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private fun answerToday(plan: DayPlan) {
+        if (CheckIn.answer(this, plan)) refresh()
+    }
+
+    private fun pickCheckInTime() {
+        val current = prefs.schedule.checkInMin
+        TimePickerDialog(this, { _, hour, minute ->
+            prefs.schedule = prefs.schedule.copy(checkInMin = hour * 60 + minute)
+            CheckIn.scheduleNext(this)
+            refresh()
+        }, current / 60, current % 60, true).apply { setTitle("Morning check-in time") }.show()
+    }
+
+    /** Asks for a start time, then an end time, and adds the window. */
+    private fun pickWindow() {
+        TimePickerDialog(this, { _, startHour, startMinute ->
+            TimePickerDialog(this, { _, endHour, endMinute ->
+                val window = TimeWindow(startHour * 60 + startMinute, endHour * 60 + endMinute)
+                if (window.startMin != window.endMin) {
+                    prefs.schedule = prefs.schedule.copy(windows = prefs.schedule.windows + window)
+                    refresh()
+                }
+            }, startHour, startMinute, true).apply { setTitle("Blocked until…") }.show()
+        }, 22, 0, true).apply { setTitle("Blocked from…") }.show()
+    }
+
+    private fun updateSchedule(blocked: Boolean, locked: Boolean) {
+        val schedule = prefs.schedule
+        val minute = clock.localMinute()
+        val answer = schedule.answerAt(minute)
+        todayPlan.text = when {
+            !schedule.on -> "Check-in is off."
+            answer == DayPlan.HOME -> "🏠 Today: working from home. Watched apps are off until tomorrow's check-in."
+            answer == DayPlan.OUT -> "🚶 Today: out. Watched apps are blocked during the hours below."
+            else -> "❓ Not answered yet, so today counts as a home day: watched apps are off."
+        }
+        val canAnswer = schedule.on
+        homeButton.visibility = if (canAnswer && answer != DayPlan.HOME) View.VISIBLE else View.GONE
+        outButton.visibility = if (canAnswer && answer == null) View.VISIBLE else View.GONE
+
+        // Changing the check-in time or removing hours loosens the rules: not while locked.
+        val canLoosen = !blocked && !locked
+        checkInButton.text = "Check-in time: ${hhmm(schedule.checkInMin)}"
+        checkInButton.isEnabled = canLoosen
+        checkInButton.alpha = if (canLoosen) 1f else 0.4f
+        addWindowButton.isEnabled = !blocked
+        addWindowButton.alpha = if (blocked) 0.4f else 1f
+
+        val shown = schedule.windows to canLoosen
+        if (shown == windowsShownFor) return
+        windowsShownFor = shown
+        windowsList.removeAllViews()
+        if (schedule.windows.isEmpty()) windowsList.addView(label("None", 14f, Palette.MUTED), block(top = 4))
+        schedule.windows.forEach { window ->
+            windowsList.addView(
+                LinearLayout(this).apply {
+                    gravity = Gravity.CENTER_VERTICAL
+                    background = rounded(Palette.CARD)
+                    setPadding(dp(16), dp(4), dp(8), dp(4))
+                    addView(label(window.label, 15f), LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+                    if (canLoosen) {
+                        addView(pillButton("Remove", Palette.NEUTRAL) {
+                            prefs.schedule = prefs.schedule.copy(windows = prefs.schedule.windows - window)
+                            refresh()
+                        })
+                    }
+                },
+                block(top = 6),
+            )
+        }
+    }
+
     override fun onResume() {
         super.onResume()
+        CheckIn.scheduleNext(this)
         AutoWatch.sync(this, prefs).forEach {
             Toast.makeText(this, "Now watching ${AutoWatch.label(this, it)}", Toast.LENGTH_SHORT).show()
         }
@@ -361,7 +469,7 @@ class MainActivity : Activity() {
         }
 
         if (breathingSwitch.isChecked != prefs.breathing) breathingSwitch.isChecked = prefs.breathing
-        if (mathsSwitch.isChecked != prefs.maths) mathsSwitch.isChecked = prefs.maths
+        updateSchedule(blocked = blocked, locked = locked)
         if (clipSoundSwitch.isChecked != prefs.clipSound) clipSoundSwitch.isChecked = prefs.clipSound
         strictSwitches.forEach { it.update() }
 
@@ -634,5 +742,6 @@ class MainActivity : Activity() {
 
     private companion object {
         const val REQUEST_CLIPS = 1
+        const val REQUEST_NOTIFICATIONS = 2
     }
 }

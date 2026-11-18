@@ -20,6 +20,10 @@ data class Config(
     val resetMs: Long,
     /** Most time allowed in watched apps per day, or 0 for no limit. */
     val dailyLimitMs: Long = 0,
+    /** Time left in a scheduled block (home day or blocked hours) happening now, or 0. */
+    val scheduleBlockMs: Long = 0,
+    /** Time until the next scheduled block starts, or null if none is coming up. */
+    val msUntilScheduledBlock: Long? = null,
 )
 
 /** Why the block screen is showing. */
@@ -30,6 +34,8 @@ enum class BlockReason {
     REOPENED,
     /** The daily limit is used up. */
     DAILY_LIMIT,
+    /** A home day, or the schedule's blocked hours. */
+    SCHEDULED,
 }
 
 /**
@@ -71,6 +77,10 @@ interface Clock {
     fun localDay(): Long
     /** Time left until midnight in the phone's time zone. */
     fun msUntilNextDay(): Long
+    /** Minutes since 1970-01-01 00:00 in the phone's time zone, for the schedule. */
+    fun localMinute(): Long
+    /** How far into the current minute we are. */
+    fun msIntoMinute(): Long
 }
 
 interface StateStore {
@@ -110,6 +120,9 @@ class SessionEngine(
     var promptShowing = false
         private set
 
+    /** A scheduled block was in force at the last check, so its end needs noticing. */
+    private var scheduledActive = false
+
     /** How many Continues came before the most recent PANIC. */
     var continuesBeforeLastPanic = 0
         private set
@@ -119,7 +132,19 @@ class SessionEngine(
     /** Currently in a watched app with the session clock running. */
     val isTiming: Boolean get() = timingSince != null
 
-    fun blockRemainingMs(): Long = state.blockRemainingMs(clock)
+    /** Time left in whichever block is in force: PANIC, daily limit or schedule. */
+    fun blockRemainingMs(): Long = maxOf(state.blockRemainingMs(clock), config().scheduleBlockMs)
+
+    /** A PANIC or daily-limit block, as opposed to only the schedule. */
+    private val ownBlockActive: Boolean get() = state.blockRemainingMs(clock) > 0
+
+    /** Why watched apps are blocked right now, for the block screen. */
+    val blockReason: BlockReason
+        get() = when {
+            !ownBlockActive -> BlockReason.SCHEDULED
+            state.dailyLimitBlock -> BlockReason.DAILY_LIMIT
+            else -> BlockReason.REOPENED
+        }
 
     val stats: Stats get() = statsState
 
@@ -129,7 +154,7 @@ class SessionEngine(
     val nextContinueNumber: Int get() = state.continuesInARow + 1
 
     /** The current block is the daily limit, not a PANIC. */
-    val isDailyLimitBlock: Boolean get() = state.dailyLimitBlock && isBlocked
+    val isDailyLimitBlock: Boolean get() = state.dailyLimitBlock && ownBlockActive
 
     /** How long the session after the next Continue would be. */
     val nextContinueSessionMs: Long get() = sessionMsFor(state.continuesInARow + 1)
@@ -174,8 +199,10 @@ class SessionEngine(
         }
         if (isBlocked) {
             if (watched) {
+                if (!ownBlockActive) scheduledActive = true
                 ui.goHome()
-                ui.showBlock(if (state.dailyLimitBlock) BlockReason.DAILY_LIMIT else BlockReason.REOPENED)
+                ui.showBlock(blockReason)
+                ui.scheduleTick(blockRemainingMs())
             }
             return
         }
@@ -183,8 +210,20 @@ class SessionEngine(
     }
 
     fun onTick() {
-        if (state.blockLenMs > 0 && !isBlocked) {
+        if (state.blockLenMs > 0 && !ownBlockActive) {
             endBlock()
+            return
+        }
+        if (scheduledActive && !isBlocked) {
+            scheduledActive = false
+            ui.hideBlock()
+            onForeground(currentPkg)
+            return
+        }
+        // Blocked hours starting while a watched app is open.
+        if (timingSince != null && config().scheduleBlockMs > 0) {
+            stopTiming()
+            startScheduledBlock()
             return
         }
         if (isBlocked) {
@@ -214,6 +253,12 @@ class SessionEngine(
      */
     fun checkpoint() {
         val since = timingSince ?: return
+        // Catches a schedule change (such as answering "home" mid-session) straight away.
+        if (config().scheduleBlockMs > 0) {
+            stopTiming()
+            startScheduledBlock()
+            return
+        }
         val now = clock.elapsed()
         if (now - since < CHECKPOINT_MS) return
         timingSince = now
@@ -256,6 +301,17 @@ class SessionEngine(
         ui.goHome()
         ui.showBlock(BlockReason.PANIC)
         ui.scheduleTick(block.lenMs)
+    }
+
+    private fun startScheduledBlock() {
+        if (promptShowing) {
+            promptShowing = false
+            ui.hidePrompt()
+        }
+        scheduledActive = true
+        ui.goHome()
+        ui.showBlock(BlockReason.SCHEDULED)
+        ui.scheduleTick(blockRemainingMs())
     }
 
     /** Blocks watched apps until midnight. No PANIC is recorded: this wasn't a choice. */
@@ -307,10 +363,11 @@ class SessionEngine(
         scheduleNextTick((currentSessionMs - state.usedMs).coerceAtLeast(0))
     }
 
-    /** Ticks when the session runs out, or sooner if the daily limit runs out first. */
+    /** Ticks when the session runs out, or sooner if the daily limit or a scheduled block comes first. */
     private fun scheduleNextTick(sessionLeftMs: Long) {
         val dailyLeft = dailyRemainingMs() ?: Long.MAX_VALUE
-        ui.scheduleTick(minOf(sessionLeftMs, dailyLeft))
+        val scheduleIn = config().msUntilScheduledBlock ?: Long.MAX_VALUE
+        ui.scheduleTick(minOf(sessionLeftMs, dailyLeft, scheduleIn))
     }
 
     private fun stopTiming() {

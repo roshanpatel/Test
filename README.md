@@ -6,19 +6,32 @@ runs out (3 minutes by default), a full-screen check appears with a countdown (1
 default, up to 5 minutes):
 
 - **PANIC BUTTON!** works at any moment: every watched app is blocked for 30 minutes.
-- **Continue browsing** is locked until the countdown ends, then gives you another full
+- **Continue browsing** is locked until the countdown ends, then gives you another, shorter
   session. The check stays on screen until you choose.
 
 The check shows your own reason (set it on the main screen), today's time in watched apps, and
-an optional breathing exercise. After the countdown, Continue also needs a maths question
-answered (on by default): it gets harder with each Continue in a row, from 7 + 8 up to 37 × 24 + 19,
-and opening a calculator earns a cheeky remark (the sum changes when you come back anyway). From the 3rd Continue in a row, continuing also needs your
-reason typed out, under the question "Is what you're doing important?". The count resets after a
-PANIC or a 30-minute break.
+one of your own clips or an optional breathing exercise. From the 3rd Continue in a row,
+continuing also needs your reason typed out, under the question "Is what you're doing
+important?". The count resets after a PANIC or a 30-minute break.
 
-Every PANIC is celebrated with an inspiration clip: one of your own GIFs, photos or videos (added
-on the main screen, muted and looping), or, until you add some, one of four built-in animations.
-While settings are locked, clips can be added but not removed.
+## Morning check-in
+
+Each morning (06:00 by default) a notification asks **"Working from home today?"**
+
+- **Yes**: watched apps are blocked all day, until the next morning's check-in.
+- **No**: the blocked hours apply (16:30 to 09:00 by default). Outside them, the usual time
+  checks apply.
+- **No answer** counts as a home day, so ignoring the question is never a way in.
+
+A home day can't be changed to "out", but "out" can be changed to home. Check-in time and
+blocked hours are set on the main screen.
+
+## Block screen
+
+Every block screen, whatever the reason, leads with something positive: one of your own GIFs,
+photos or videos (muted and looping), or, until you add some, one of four built-in animations,
+with a line like "Remember why you're doing this." and your own reason. After a PANIC it also
+celebrates. While settings are locked, clips can be added but not removed.
 
 The main screen also tracks your progress: today's totals, a streak of good days (a day where you
 pressed PANIC, or never chose Continue), a progress bar to the next milestone, and time back from
@@ -47,7 +60,7 @@ Getting round Jolt is harder too:
   newly installed social or video app;
 - during a block the Play Store and other app stores are blocked as well;
 - a guided setup turns on a family filter for the whole phone using Android's Private DNS
-  setting, and while settings are locked the Private DNS setting can't be changed.
+  setting, and once it's on, the setting can't be changed while Jolt is running.
 
 If you add your own clips, one plays on the time check during the countdown, in place of the
 breathing circle: a reminder of what this is for, right when you choose. Videos can optionally

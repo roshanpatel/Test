@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import android.provider.Settings
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.ZoneId
 
 class Prefs(context: Context) : StateStore, StatsStore {
@@ -24,10 +25,6 @@ class Prefs(context: Context) : StateStore, StatsStore {
     var breathing: Boolean
         get() = sp.getBoolean(KEY_BREATHING, true)
         set(value) = sp.edit().putBoolean(KEY_BREATHING, value).apply()
-
-    var maths: Boolean
-        get() = sp.getBoolean(KEY_MATHS, true)
-        set(value) = sp.edit().putBoolean(KEY_MATHS, value).apply()
 
     /** The user's own reason for cutting back, shown on the time check. */
     var reason: String
@@ -61,15 +58,42 @@ class Prefs(context: Context) : StateStore, StatsStore {
         get() = sp.getBoolean(KEY_CLIP_SOUND, false)
         set(value) = sp.edit().putBoolean(KEY_CLIP_SOUND, value).apply()
 
-    fun config() = Config(
-        watched = watched,
-        sessionMs = sessionMinutes * MINUTE_MS,
-        blockMs = blockMinutes * MINUTE_MS,
-        resetMs = RESET_AFTER_BREAK_MS,
-        dailyLimitMs = if (dailyLimitOn) dailyLimitMinutes * MINUTE_MS else 0,
-    )
+    var schedule: Schedule
+        get() = Schedule(
+            on = sp.getBoolean(KEY_SCHEDULE_ON, true),
+            checkInMin = sp.getInt(KEY_CHECK_IN_MIN, Schedule.DEFAULT_CHECK_IN_MIN),
+            windows = Schedule.decodeWindows(sp.getString(KEY_WINDOWS, null)),
+            answerDay = sp.getLong(KEY_ANSWER_DAY, Stats.NO_DAY),
+            answer = sp.getString(KEY_ANSWER, null)?.let { runCatching { DayPlan.valueOf(it) }.getOrNull() },
+        )
+        set(value) {
+            sp.edit()
+                .putBoolean(KEY_SCHEDULE_ON, value.on)
+                .putInt(KEY_CHECK_IN_MIN, value.checkInMin)
+                .putString(KEY_WINDOWS, Schedule.encodeWindows(value.windows))
+                .putLong(KEY_ANSWER_DAY, value.answerDay)
+                .putString(KEY_ANSWER, value.answer?.name)
+                .apply()
+        }
 
-    fun blockRemainingMs(clock: Clock): Long = load().blockRemainingMs(clock)
+    fun config(clock: Clock): Config {
+        val schedule = schedule
+        val minute = clock.localMinute()
+        val intoMinute = clock.msIntoMinute()
+        return Config(
+            watched = watched,
+            sessionMs = sessionMinutes * MINUTE_MS,
+            blockMs = blockMinutes * MINUTE_MS,
+            resetMs = RESET_AFTER_BREAK_MS,
+            dailyLimitMs = if (dailyLimitOn) dailyLimitMinutes * MINUTE_MS else 0,
+            scheduleBlockMs = schedule.blockMsLeft(minute, intoMinute),
+            msUntilScheduledBlock = schedule.msUntilBlock(minute, intoMinute),
+        )
+    }
+
+    /** Time left in whichever block is in force, the schedule included. */
+    fun blockRemainingMs(clock: Clock): Long =
+        maxOf(load().blockRemainingMs(clock), schedule.blockMsLeft(clock.localMinute(), clock.msIntoMinute()))
 
     var lock: LockState
         get() = LockState(
@@ -137,7 +161,11 @@ class Prefs(context: Context) : StateStore, StatsStore {
         const val KEY_BLOCK_MIN = "block_min"
         const val KEY_PAUSE_SEC = "pause_sec"
         const val KEY_BREATHING = "breathing"
-        const val KEY_MATHS = "maths"
+        const val KEY_SCHEDULE_ON = "schedule_on"
+        const val KEY_CHECK_IN_MIN = "check_in_min"
+        const val KEY_WINDOWS = "blocked_windows"
+        const val KEY_ANSWER_DAY = "answer_day"
+        const val KEY_ANSWER = "answer"
         const val KEY_DAILY_ON = "daily_limit_on"
         const val KEY_DAILY_MIN = "daily_limit_min"
         const val KEY_AUTO_WATCH = "auto_watch"
@@ -154,6 +182,16 @@ class AndroidClock(context: Context) : Clock {
     override fun wall() = System.currentTimeMillis()
     override fun bootCount() = Settings.Global.getInt(resolver, Settings.Global.BOOT_COUNT, EngineState.UNKNOWN_BOOT)
     override fun localDay() = LocalDate.now().toEpochDay()
+    override fun localMinute(): Long {
+        val now = LocalDateTime.now()
+        return now.toLocalDate().toEpochDay() * MINUTES_PER_DAY + now.hour * 60 + now.minute
+    }
+
+    override fun msIntoMinute(): Long {
+        val now = LocalDateTime.now()
+        return now.second * 1000L + now.nano / 1_000_000
+    }
+
     override fun msUntilNextDay(): Long {
         val midnight = LocalDate.now().plusDays(1).atStartOfDay(ZoneId.systemDefault())
         return (midnight.toInstant().toEpochMilli() - System.currentTimeMillis()).coerceAtLeast(1000)

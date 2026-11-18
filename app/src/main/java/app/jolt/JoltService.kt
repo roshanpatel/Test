@@ -44,8 +44,6 @@ class JoltService : AccessibilityService(), EngineUi {
     private var lastActivityPkg: String? = null
     private var lastTamperCheck = 0L
     private var lastLockedNotice = 0L
-    /** When the maths question was last left unanswered, to catch a calculator trip. */
-    private var mathsLeftAt = 0L
     private var watchdogRunning = false
     private var receiverRegistered = false
     private var webFilterCheckedAt = 0L
@@ -85,7 +83,7 @@ class JoltService : AccessibilityService(), EngineUi {
         clock = AndroidClock(this)
         overlays = Overlays(this)
         appLabel = applicationInfo.loadLabel(packageManager).toString()
-        engine = SessionEngine(prefs::config, clock, prefs, prefs, this)
+        engine = SessionEngine({ prefs.config(clock) }, clock, prefs, prefs, this)
 
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
@@ -102,6 +100,7 @@ class JoltService : AccessibilityService(), EngineUi {
         }
         receiverRegistered = true
         AutoWatch.sync(this, prefs)
+        CheckIn.scheduleNext(this)
 
         engine.start()
         ensureWatchdog()
@@ -129,6 +128,10 @@ class JoltService : AccessibilityService(), EngineUi {
                     kickOut()
                     return
                 }
+                if (isDnsScreen(pkg)) {
+                    kickOut(DNS_LOCKED)
+                    return
+                }
                 // Watched apps count on any window change; for other apps only a real screen
                 // (activity) counts, so their pop-ups don't end a watched session.
                 if (cls == null || (watched && !isToast(cls)) || isActivity(pkg, cls)) onAppOpened(pkg)
@@ -137,11 +140,16 @@ class JoltService : AccessibilityService(), EngineUi {
                 // Catches a watched app that opened without a window change we recognised
                 // (it fires constantly while scrolling), and Settings swapping pages in place.
                 val blockedApp = blocked && (watched || isAppStore(pkg))
-                if (!blockedApp && !(needsTextCheck(pkg) && guardActive())) return
+                val guard = guardActive()
+                if (!blockedApp && !(needsTextCheck(pkg) && (guard || isWebFilterOn()))) return
                 val now = SystemClock.elapsedRealtime()
                 if (now - lastTamperCheck < TAMPER_CHECK_INTERVAL_MS) return
                 lastTamperCheck = now
-                if (blockedApp && activeWindowPackage() == pkg || isTamperScreen(pkg, blocked)) kickOut()
+                when {
+                    blockedApp && activeWindowPackage() == pkg -> kickOut()
+                    guard && isTamperScreen(pkg, blocked) -> kickOut()
+                    isDnsScreen(pkg) -> kickOut(DNS_LOCKED)
+                }
             }
         }
     }
@@ -160,6 +168,10 @@ class JoltService : AccessibilityService(), EngineUi {
         val blocked = engine.isBlocked
         if (guardActive() && isTamperScreen(pkg, blocked)) {
             kickOut()
+            return
+        }
+        if (isDnsScreen(pkg)) {
+            kickOut(DNS_LOCKED)
             return
         }
         if (blocked) {
@@ -185,13 +197,7 @@ class JoltService : AccessibilityService(), EngineUi {
 
     private fun onAppOpened(pkg: String) {
         lastActivityPkg = pkg
-        val now = SystemClock.elapsedRealtime()
-        if (overlays.mathsShowing) mathsLeftAt = now
         if (isScreenOn()) engine.onForeground(pkg)
-        if (isCalculator(pkg) && mathsLeftAt > 0 && now - mathsLeftAt < CALCULATOR_WINDOW_MS) {
-            mathsLeftAt = 0
-            overlays.showJab(CALCULATOR_JABS.random())
-        }
         ensureWatchdog()
     }
 
@@ -220,10 +226,15 @@ class JoltService : AccessibilityService(), EngineUi {
     private fun isTamperScreen(pkg: String, blocked: Boolean): Boolean {
         if (pkg.contains("packageinstaller")) return blocked || screenMentions(pkg, "uninstall")
         if (!needsTextCheck(pkg)) return false
-        // The Private DNS dialog, while the web filter is on: it can't be quietly switched off.
-        if (pkg.contains("settings") && isWebFilterOn() && screenMentions(pkg, "provider hostname")) return true
         return screenMentions(pkg, appLabel)
     }
+
+    /**
+     * The Private DNS dialog, while the web filter is on. Guarded whenever Jolt is running,
+     * locked or not, so the filter can't be quietly switched off.
+     */
+    private fun isDnsScreen(pkg: String) =
+        pkg.contains("settings") && isWebFilterOn() && screenMentions(pkg, "provider hostname")
 
     /** Cached, as this is checked on every Settings screen change. */
     private fun isWebFilterOn(): Boolean {
@@ -241,15 +252,16 @@ class JoltService : AccessibilityService(), EngineUi {
         return root.findAccessibilityNodeInfosByText(text).isNotEmpty()
     }
 
-    private fun kickOut() {
+    /** Sends the user home; shows the block screen if blocked, otherwise [notice]. */
+    private fun kickOut(notice: String = "Settings are locked.") {
         performGlobalAction(GLOBAL_ACTION_HOME)
-        if (engine.isBlocked) {
-            showBlock(if (engine.isDailyLimitBlock) BlockReason.DAILY_LIMIT else BlockReason.REOPENED)
+        if (engine.isBlocked && notice != DNS_LOCKED) {
+            showBlock(engine.blockReason)
         } else {
             val now = SystemClock.elapsedRealtime()
             if (now - lastLockedNotice > LOCKED_NOTICE_INTERVAL_MS) {
                 lastLockedNotice = now
-                Toast.makeText(this, "Settings are locked.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, notice, Toast.LENGTH_SHORT).show()
             }
         }
         ensureWatchdog()
@@ -267,8 +279,6 @@ class JoltService : AccessibilityService(), EngineUi {
                 todayWatchedMs = engine.today.watchedMs,
                 dailyLeftMs = engine.dailyRemainingMs(),
                 needsReason = engine.continueNeedsReason,
-                maths = prefs.maths,
-                mathsLevel = engine.nextContinueNumber,
                 clipSound = prefs.clipSound,
             ),
             onContinue = { engine.onContinue() },
@@ -283,11 +293,34 @@ class JoltService : AccessibilityService(), EngineUi {
         overlays.showBlock(
             remainingMs = { engine.blockRemainingMs() },
             celebration = if (reason == BlockReason.PANIC) celebration() else null,
-            dailyLimit = reason == BlockReason.DAILY_LIMIT,
+            explanation = explain(reason),
+            myReason = prefs.reason,
             clipSound = prefs.clipSound,
             onDismiss = ::goHome,
         )
         ensureWatchdog()
+    }
+
+    /** Why watched apps are blocked, and until when, ending just before the countdown. */
+    private fun explain(reason: BlockReason): String = when (reason) {
+        BlockReason.PANIC, BlockReason.REOPENED -> "Your watched apps are locked for"
+        BlockReason.DAILY_LIMIT -> "You've used today's limit in watched apps. They open again at midnight, in"
+        BlockReason.SCHEDULED -> {
+            val schedule = prefs.schedule
+            val minute = clock.localMinute()
+            when (schedule.answerAt(minute)) {
+                DayPlan.HOME -> "Working from home today. Watched apps are off until tomorrow's check-in, in"
+                null -> "No check-in answer yet, so today counts as a home day. Answer it on Jolt's main screen. Watched apps are off for"
+                DayPlan.OUT -> {
+                    val endsAt = Math.floorMod(minute + (engine.blockRemainingMs() + clock.msIntoMinute()) / MINUTE_MS, MINUTES_PER_DAY.toLong())
+                    if (endsAt.toInt() == schedule.checkInMin) {
+                        "Scheduled break, until the morning check-in at ${hhmm(endsAt.toInt())}, in"
+                    } else {
+                        "Scheduled break. Watched apps open again at ${hhmm(endsAt.toInt())}, in"
+                    }
+                }
+            }
+        }
     }
 
     private fun celebration(): Celebration {
@@ -362,9 +395,9 @@ class JoltService : AccessibilityService(), EngineUi {
             "com.apkpure.aegon",
         )
         const val WEB_FILTER_CHECK_MS = 30_000L
+        const val DNS_LOCKED = "Private DNS is locked while Jolt is on."
         const val TAMPER_CHECK_INTERVAL_MS = 300L
         const val WATCHDOG_INTERVAL_MS = 2000L
         const val LOCKED_NOTICE_INTERVAL_MS = 3000L
-        const val CALCULATOR_WINDOW_MS = 60_000L
     }
 }

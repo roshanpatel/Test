@@ -4,6 +4,8 @@
 
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- The morning "Working from home today?" check-in. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Reads whether the Private DNS web filter is on. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Needed to list installed apps and to tell real app screens apart from
@@ -34,6 +36,10 @@
         <activity
             android:name=".AppPickerActivity"
             android:excludeFromRecents="true"
+            android:exported="false" />
+
+        <receiver
+            android:name=".CheckInReceiver"
             android:exported="false" />
 
         <service
