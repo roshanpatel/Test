@@ -587,6 +587,18 @@ class SessionEngineTest {
     }
 
     @Test
+    fun out_can_only_be_answered_before_cut_off() {
+        assertTrue(schedule.canAnswerOut(at(10, 6)))
+        assertTrue(schedule.canAnswerOut(at(10, 8, 59)))
+        assertFalse(schedule.canAnswerOut(at(10, 9)))
+        assertEquals("ignored question can't open apps later", null, schedule.answer(at(10, 14), DayPlan.OUT))
+        assertEquals(null, schedule.answer(at(11, 2), DayPlan.OUT))
+        assertEquals(DayPlan.HOME, schedule.answer(at(10, 14), DayPlan.HOME)!!.planAt(at(10, 14)))
+        val out = schedule.answer(at(10, 7), DayPlan.OUT)!!
+        assertFalse("already answered", out.canAnswerOut(at(10, 8)))
+    }
+
+    @Test
     fun block_ends_at_window_end_or_check_in() {
         val out = schedule.answer(at(10, 7), DayPlan.OUT)!!
         assertEquals(2 * MINUTE_MS, out.blockMsLeft(at(10, 8, 58), 0))

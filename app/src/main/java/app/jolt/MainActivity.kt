@@ -339,13 +339,16 @@ class MainActivity : Activity() {
         if (CheckIn.answer(this, plan)) refresh()
     }
 
+    /** Asks for the check-in time, then the time "I'm out" must be answered by. */
     private fun pickCheckInTime() {
-        val current = prefs.schedule.checkInMin
+        val schedule = prefs.schedule
         TimePickerDialog(this, { _, hour, minute ->
-            prefs.schedule = prefs.schedule.copy(checkInMin = hour * 60 + minute)
-            CheckIn.scheduleNext(this)
-            refresh()
-        }, current / 60, current % 60, true).apply { setTitle("Morning check-in time") }.show()
+            TimePickerDialog(this, { _, byHour, byMinute ->
+                prefs.schedule = prefs.schedule.copy(checkInMin = hour * 60 + minute, answerByMin = byHour * 60 + byMinute)
+                CheckIn.scheduleNext(this)
+                refresh()
+            }, schedule.answerByMin / 60, schedule.answerByMin % 60, true).apply { setTitle("Answer \"I'm out\" by…") }.show()
+        }, schedule.checkInMin / 60, schedule.checkInMin % 60, true).apply { setTitle("Morning check-in time") }.show()
     }
 
     /** Asks for a start time, then an end time, and adds the window. */
@@ -369,15 +372,16 @@ class MainActivity : Activity() {
             !schedule.on -> "Check-in is off."
             answer == DayPlan.HOME -> "🏠 Today: working from home. Watched apps are off until tomorrow's check-in."
             answer == DayPlan.OUT -> "🚶 Today: out. Watched apps are blocked during the hours below."
-            else -> "❓ Not answered yet, so today counts as a home day: watched apps are off."
+            schedule.canAnswerOut(minute) ->
+                "❓ Not answered yet. Until you do, today counts as a home day. Answer by ${hhmm(schedule.answerByMin)}."
+            else -> "🏠 Not answered by ${hhmm(schedule.answerByMin)}, so today is a home day: watched apps are off."
         }
-        val canAnswer = schedule.on
-        homeButton.visibility = if (canAnswer && answer != DayPlan.HOME) View.VISIBLE else View.GONE
-        outButton.visibility = if (canAnswer && answer == null) View.VISIBLE else View.GONE
+        homeButton.visibility = if (schedule.on && answer != DayPlan.HOME) View.VISIBLE else View.GONE
+        outButton.visibility = if (schedule.on && schedule.canAnswerOut(minute)) View.VISIBLE else View.GONE
 
         // Changing the check-in time or removing hours loosens the rules: not while locked.
         val canLoosen = !blocked && !locked
-        checkInButton.text = "Check-in time: ${hhmm(schedule.checkInMin)}"
+        checkInButton.text = "Check-in: ${hhmm(schedule.checkInMin)}, answer by ${hhmm(schedule.answerByMin)}"
         checkInButton.isEnabled = canLoosen
         checkInButton.alpha = if (canLoosen) 1f else 0.4f
         addWindowButton.isEnabled = !blocked

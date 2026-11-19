@@ -62,6 +62,7 @@ class Prefs(context: Context) : StateStore, StatsStore {
         get() = Schedule(
             on = sp.getBoolean(KEY_SCHEDULE_ON, true),
             checkInMin = sp.getInt(KEY_CHECK_IN_MIN, Schedule.DEFAULT_CHECK_IN_MIN),
+            answerByMin = sp.getInt(KEY_ANSWER_BY_MIN, Schedule.DEFAULT_ANSWER_BY_MIN),
             windows = Schedule.decodeWindows(sp.getString(KEY_WINDOWS, null)),
             answerDay = sp.getLong(KEY_ANSWER_DAY, Stats.NO_DAY),
             answer = sp.getString(KEY_ANSWER, null)?.let { runCatching { DayPlan.valueOf(it) }.getOrNull() },
@@ -70,6 +71,7 @@ class Prefs(context: Context) : StateStore, StatsStore {
             sp.edit()
                 .putBoolean(KEY_SCHEDULE_ON, value.on)
                 .putInt(KEY_CHECK_IN_MIN, value.checkInMin)
+                .putInt(KEY_ANSWER_BY_MIN, value.answerByMin)
                 .putString(KEY_WINDOWS, Schedule.encodeWindows(value.windows))
                 .putLong(KEY_ANSWER_DAY, value.answerDay)
                 .putString(KEY_ANSWER, value.answer?.name)
@@ -163,6 +165,7 @@ class Prefs(context: Context) : StateStore, StatsStore {
         const val KEY_BREATHING = "breathing"
         const val KEY_SCHEDULE_ON = "schedule_on"
         const val KEY_CHECK_IN_MIN = "check_in_min"
+        const val KEY_ANSWER_BY_MIN = "answer_by_min"
         const val KEY_WINDOWS = "blocked_windows"
         const val KEY_ANSWER_DAY = "answer_day"
         const val KEY_ANSWER = "answer"

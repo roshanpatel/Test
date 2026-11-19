@@ -70,10 +70,14 @@ object CheckIn {
             Intent(context, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE,
         )
+        val answerBy = hhmm(Prefs(context).schedule.answerByMin)
         val notification = Notification.Builder(context, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
             .setContentTitle("Working from home today?")
-            .setContentText("Yes: watched apps stay off all day. No: your schedule applies. No answer counts as yes.")
+            .setContentText(
+                "Yes: watched apps stay off all day. No: your blocked hours apply. " +
+                    "Answer by $answerBy, or today counts as a home day.",
+            )
             .setStyle(Notification.BigTextStyle())
             .setContentIntent(open)
             .setAutoCancel(true)
@@ -90,11 +94,18 @@ object CheckIn {
     /** Records today's answer. Returns false if it isn't allowed (a home day is final). */
     fun answer(context: Context, plan: DayPlan): Boolean {
         val prefs = Prefs(context)
-        val updated = prefs.schedule.answer(AndroidClock(context).localMinute(), plan)
+        val schedule = prefs.schedule
+        val minute = AndroidClock(context).localMinute()
+        val updated = schedule.answer(minute, plan)
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.cancel(NOTIFICATION_ID)
         if (updated == null) {
-            Toast.makeText(context, "Today's already a home day. That can't be changed.", Toast.LENGTH_LONG).show()
+            val why = if (schedule.answerAt(minute) == DayPlan.HOME) {
+                "Today's already a home day. That can't be changed."
+            } else {
+                "Too late to answer: after ${hhmm(schedule.answerByMin)}, today counts as a home day."
+            }
+            Toast.makeText(context, why, Toast.LENGTH_LONG).show()
             return false
         }
         prefs.schedule = updated

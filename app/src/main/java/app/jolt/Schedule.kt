@@ -28,6 +28,8 @@ enum class DayPlan {
 data class Schedule(
     val on: Boolean = true,
     val checkInMin: Int = DEFAULT_CHECK_IN_MIN,
+    /** "I'm out" can only be answered between the check-in and this time. */
+    val answerByMin: Int = DEFAULT_ANSWER_BY_MIN,
     val windows: List<TimeWindow> = DEFAULT_WINDOWS,
     val answerDay: Long = Stats.NO_DAY,
     val answer: DayPlan? = null,
@@ -76,13 +78,20 @@ data class Schedule(
         return null
     }
 
+    /** Whether "I'm out" can still be answered: between the check-in and [answerByMin]. */
+    fun canAnswerOut(localMinute: Long): Boolean {
+        if (answerAt(localMinute) != null) return false
+        val minute = Math.floorMod(localMinute, MINUTES_PER_DAY.toLong()).toInt()
+        return TimeWindow(checkInMin, answerByMin).contains(minute)
+    }
+
     /**
-     * Records the answer for the current check-in day. A home day is final; an "out" answer
-     * can still be changed to home. Returns null if the change isn't allowed.
+     * Records the answer for the current check-in day. Home can be answered any time; "out"
+     * only before [answerByMin] on a day with no answer yet, so an ignored question can't
+     * become a way in later. Returns null if the answer isn't allowed.
      */
     fun answer(localMinute: Long, plan: DayPlan): Schedule? {
-        val current = answerAt(localMinute)
-        if (current == DayPlan.HOME && plan == DayPlan.OUT) return null
+        if (plan == DayPlan.OUT && !canAnswerOut(localMinute)) return null
         return copy(answerDay = checkInDay(localMinute), answer = plan)
     }
 
@@ -91,6 +100,7 @@ data class Schedule(
 
     companion object {
         const val DEFAULT_CHECK_IN_MIN = 6 * 60
+        const val DEFAULT_ANSWER_BY_MIN = 9 * 60
         val DEFAULT_WINDOWS = listOf(TimeWindow(19 * 60, 9 * 60), TimeWindow(16 * 60 + 30, 19 * 60))
 
         fun encodeWindows(windows: List<TimeWindow>) = windows.joinToString(",") { "${it.startMin}-${it.endMin}" }

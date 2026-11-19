@@ -23,7 +23,8 @@ Each morning (06:00 by default) a notification asks **"Working from home today?"
   checks apply.
 - **No answer** counts as a home day, so ignoring the question is never a way in.
 
-A home day can't be changed to "out", but "out" can be changed to home. Check-in time and
+"No" can only be answered until 09:00; after that an unanswered day stays a home day. A home
+day can't be changed to "out", but "out" can be changed to home. Check-in time and
 blocked hours are set on the main screen.
 
 ## Block screen
