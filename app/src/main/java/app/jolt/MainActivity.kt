@@ -608,8 +608,7 @@ class MainActivity : Activity() {
     /** Rebuilds the clip list only when it or the lock state changes. */
     private fun updateClips(blocked: Boolean, locked: Boolean) {
         val files = clips.list()
-        addClips.isEnabled = !blocked
-        addClips.alpha = if (blocked) 0.4f else 1f
+        // Adding inspiration is always allowed, even during a block. Only removing is restricted.
         val canRemove = !blocked && !locked
         val names = files.map { it.name }
         if (names == clipsShownFor && canRemove == clipsLockedShown) return

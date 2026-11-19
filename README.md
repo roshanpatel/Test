@@ -32,7 +32,8 @@ blocked hours are set on the main screen.
 Every block screen, whatever the reason, leads with something positive: one of your own GIFs,
 photos or videos (muted and looping), or, until you add some, one of four built-in animations,
 with a line like "Remember why you're doing this." and your own reason. After a PANIC it also
-celebrates. While settings are locked, clips can be added but not removed.
+celebrates. Clips can be added at any time, even during a block; while blocked or locked they can't be
+removed.
 
 The main screen also tracks your progress: today's totals, a streak of good days (a day where you
 pressed PANIC, or never chose Continue), a progress bar to the next milestone, and time back from
