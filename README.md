@@ -46,7 +46,8 @@ A block can't be cancelled. While it runs:
 - Jolt's settings and app list are locked;
 - Jolt doesn't appear in the app switcher, so it can't be swiped away;
 - Settings screens that mention Jolt are blocked. That covers uninstalling, force-stopping,
-  and turning off its accessibility service. So is the system uninstall dialog.
+  and turning off its accessibility service. So is the uninstall dialog for Jolt, and installing
+  new apps. Uninstalling any other app is always allowed: removing temptation is never blocked.
 
 Leaving the watched apps pauses the session timer, so dipping in and out doesn't reset it. A
 break of 30 minutes or more, or the end of a block, gives you a fresh session. The browse time,

@@ -219,12 +219,20 @@ class JoltService : AccessibilityService(), EngineUi {
         pkg.contains("settings") || pkg.contains("packageinstaller") || pkg == PLAY_STORE
 
     /**
-     * Uninstall dialogs, or a Settings / Play Store screen that mentions this app. During a
-     * block the installer is off limits entirely; while only locked, installing updates is
-     * still allowed and just uninstall screens are stopped.
+     * Uninstalling Jolt, or a Settings / Play Store screen that mentions this app.
+     *
+     * The installer: uninstalling any *other* app is always allowed, since removing
+     * temptation should never be blocked. Uninstalling Jolt is stopped. During a block,
+     * installing anything is stopped too, so a new way round can't be added mid-block.
      */
     private fun isTamperScreen(pkg: String, blocked: Boolean): Boolean {
-        if (pkg.contains("packageinstaller")) return blocked || screenMentions(pkg, "uninstall")
+        if (pkg.contains("packageinstaller")) {
+            // Wait until the dialog's text is readable before deciding.
+            if (rootInActiveWindow?.packageName?.toString() != pkg) return false
+            val uninstalling = screenMentions(pkg, "uninstall")
+            if (screenMentions(pkg, appLabel)) return uninstalling || blocked
+            return blocked && !uninstalling
+        }
         if (!needsTextCheck(pkg)) return false
         return screenMentions(pkg, appLabel)
     }
