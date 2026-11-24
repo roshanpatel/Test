@@ -11,8 +11,10 @@ android {
         applicationId = "app.jolt"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        // Each CI build's number, so updates always count up (release build-N is version N).
+        val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionCode = build
+        versionName = "build $build"
     }
 
     // Fixed debug key so every CI build can install over the previous one.

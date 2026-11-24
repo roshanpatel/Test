@@ -69,6 +69,20 @@ If you add your own clips, one plays on the time check during the countdown, in 
 breathing circle: a reminder of what this is for, right when you choose. Videos can optionally
 play with quiet sound (never on silent or vibrate).
 
+## Opening links
+
+Set Jolt as the phone's link opener (on the main screen), and web links from emails and messages
+open in Jolt's own viewer, even during a block. There's no address bar and no search; links on
+the same site work, links to another site ask first, and the viewer closes after 10 minutes.
+Feeds, search engines and betting sites are refused, and Chrome and other browsers stay blocked
+as usual. In Gmail, turn off "Open web links in Gmail" so its links come to Jolt.
+
+## Updates
+
+**Check for updates** on the main screen downloads the newest build from GitHub and installs it,
+no browser needed. Updating Jolt is allowed even during a block (Android asks once for
+permission to let Jolt install its own updates).
+
 ## Lock settings
 
 Locking stops you loosening the rules in a weak moment. While locked you can still add apps,

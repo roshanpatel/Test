@@ -1,27 +1,30 @@
 package app.jolt
 
-import android.app.Activity
 import android.Manifest
+import android.app.Activity
 import android.app.AlertDialog
 import android.app.TimePickerDialog
+import android.app.role.RoleManager
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.Button
 import android.widget.EditText
-import android.widget.Switch
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 
@@ -69,6 +72,8 @@ class MainActivity : Activity() {
     private val strictSwitches = mutableListOf<StrictSwitch>()
     private lateinit var clipSoundSwitch: Switch
     private lateinit var filterStatus: TextView
+    private lateinit var linksStatus: TextView
+    private lateinit var linksButton: Button
     private lateinit var filterButton: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -304,6 +309,35 @@ class MainActivity : Activity() {
         lockedNote = label("", 14f, Palette.PANIC)
         column.addView(lockedNote, block(top = 16))
 
+        column.addView(section("Opening links"))
+        column.addView(
+            label(
+                "Make Jolt your link opener, and links from emails and messages open in Jolt's own " +
+                    "viewer, even during a block. No address bar, no search, ${LINK_VIEW_MS / MINUTE_MS} minutes per link. " +
+                    "Feeds, search and betting sites stay closed. Chrome and other browsers stay blocked as usual.",
+                14f,
+                Palette.MUTED,
+            ),
+            block(top = 8),
+        )
+        linksStatus = label("", 15f, bold = true)
+        column.addView(linksStatus, block(top = 8))
+        linksButton = pillButton("Make Jolt the link opener", Palette.NEUTRAL) { requestLinkOpener() }
+        column.addView(linksButton, block(top = 8))
+        column.addView(
+            label(
+                "Using Gmail? Turn off Settings → General settings → \"Open web links in Gmail\", " +
+                    "or its links will try to open in Chrome.",
+                13f,
+                Palette.MUTED,
+            ),
+            block(top = 8),
+        )
+
+        column.addView(section("Updates"))
+        column.addView(label("You're on ${packageManager.getPackageInfo(packageName, 0).versionName}.", 14f, Palette.MUTED), block(top = 8))
+        column.addView(pillButton("Check for updates", Palette.NEUTRAL) { checkForUpdates() }, block(top = 8))
+
         column.addView(section("Lock settings"))
         lockText = label("", 15f, Palette.MUTED)
         column.addView(lockText, block(top = 8))
@@ -315,6 +349,72 @@ class MainActivity : Activity() {
             setBackgroundColor(Palette.BACKGROUND)
             addView(column)
         })
+    }
+
+    private fun isLinkOpener(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val roles = getSystemService(RoleManager::class.java)
+            if (roles != null && roles.isRoleAvailable(RoleManager.ROLE_BROWSER)) return roles.isRoleHeld(RoleManager.ROLE_BROWSER)
+        }
+        val view = Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com"))
+        return packageManager.resolveActivity(view, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName == packageName
+    }
+
+    private fun requestLinkOpener() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val roles = getSystemService(RoleManager::class.java)
+            if (roles != null && roles.isRoleAvailable(RoleManager.ROLE_BROWSER)) {
+                startActivityForResult(roles.createRequestRoleIntent(RoleManager.ROLE_BROWSER), REQUEST_BROWSER)
+                return
+            }
+        }
+        try {
+            startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(this, "Set Jolt as the browser app in Settings → Apps → Default apps.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun checkForUpdates() {
+        Toast.makeText(this, "Checking…", Toast.LENGTH_SHORT).show()
+        Thread {
+            val latest = Updater.latest()
+            val installed = Updater.installedNumber(this)
+            runOnUiThread {
+                when {
+                    latest == null -> Toast.makeText(this, "Couldn't reach GitHub. Try again later.", Toast.LENGTH_LONG).show()
+                    latest.number <= installed -> Toast.makeText(this, "You're up to date.", Toast.LENGTH_SHORT).show()
+                    else -> AlertDialog.Builder(this)
+                        .setTitle("Build ${latest.number} is available")
+                        .setMessage("Download and install it now?")
+                        .setPositiveButton("Install") { _, _ -> installUpdate(latest) }
+                        .setNegativeButton("Later", null)
+                        .show()
+                }
+            }
+        }.start()
+    }
+
+    private fun installUpdate(release: Updater.Release) {
+        if (!packageManager.canRequestPackageInstalls()) {
+            AlertDialog.Builder(this)
+                .setTitle("One-time permission")
+                .setMessage("Android needs you to allow Jolt to install its own updates. Switch on \"Allow from this source\", then come back and tap Install again.")
+                .setPositiveButton("Open setting") { _, _ ->
+                    startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+            return
+        }
+        Toast.makeText(this, "Downloading build ${release.number}…", Toast.LENGTH_SHORT).show()
+        Thread {
+            try {
+                Updater.install(this, release)
+            } catch (e: Exception) {
+                runOnUiThread { Toast.makeText(this, "Download failed. Try again later.", Toast.LENGTH_LONG).show() }
+            }
+        }.start()
     }
 
     private fun setUpFilter() {
@@ -486,6 +586,11 @@ class MainActivity : Activity() {
             filterStatus.setTextColor(Palette.MUTED)
         }
         filterButton.visibility = if (filterHost == null) View.VISIBLE else View.GONE
+
+        val opener = isLinkOpener()
+        linksStatus.text = if (opener) "✓ Jolt opens your links" else "✗ Links open in your browser (blocked during blocks)"
+        linksStatus.setTextColor(if (opener) Palette.GOOD else Palette.MUTED)
+        linksButton.visibility = if (opener) View.GONE else View.VISIBLE
         val canEditReason = !blocked && !locked
         reasonInput.isEnabled = canEditReason
         saveReason.isEnabled = canEditReason
@@ -746,5 +851,6 @@ class MainActivity : Activity() {
     private companion object {
         const val REQUEST_CLIPS = 1
         const val REQUEST_NOTIFICATIONS = 2
+        const val REQUEST_BROWSER = 3
     }
 }

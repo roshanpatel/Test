@@ -677,6 +677,40 @@ class SessionEngineTest {
     }
 
     @Test
+    fun link_viewer_refuses_feeds_search_and_betting() {
+        assertTrue(refusalFor("https://www.facebook.com/somepost") != null)
+        assertTrue(refusalFor("https://m.facebook.com/") != null)
+        assertTrue(refusalFor("https://old.reddit.com/r/anything") != null)
+        assertTrue(refusalFor("https://www.google.co.uk/search?q=x") != null)
+        assertTrue(refusalFor("https://www.google.com/") != null)
+        assertTrue(refusalFor("https://duckduckgo.com/?q=x") != null)
+        assertTrue(refusalFor("https://www.bet365.com/") != null)
+        assertTrue(refusalFor("https://sports.williamhill.com/") != null)
+    }
+
+    @Test
+    fun link_viewer_opens_ordinary_links() {
+        assertEquals(null, refusalFor("https://www.bbc.co.uk/news/article-123"))
+        assertEquals(null, refusalFor("https://track.royalmail.com/parcel/AB123"))
+        assertEquals(null, refusalFor("https://docs.google.com/document/d/abc"))
+        assertEquals(null, refusalFor("https://www.google.com/url?q=https://example.com"))
+        assertEquals(null, refusalFor("not a url"))
+    }
+
+    @Test
+    fun sites_are_grouped_by_registrable_domain() {
+        assertEquals("bbc.co.uk", siteOf("news.bbc.co.uk"))
+        assertEquals("facebook.com", siteOf("m.facebook.com"))
+        assertEquals("example.com", siteOf("www.example.com"))
+        assertTrue(sameSite("shop.example.com", "example.com"))
+        assertFalse(sameSite("example.com", "example.org"))
+        assertFalse(sameSite("bbc.co.uk", "itv.co.uk"))
+        assertEquals("bbc.co.uk", hostOf("https://www.bbc.co.uk/news"))
+        assertTrue(isWebLink("HTTPS://example.com"))
+        assertFalse(isWebLink("mailto:me@example.com"))
+    }
+
+    @Test
     fun remembers_continues_before_panic() {
         engine.onForeground(FACEBOOK)
         runFor(3 * MINUTE_MS)

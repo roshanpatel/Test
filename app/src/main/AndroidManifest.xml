@@ -4,6 +4,10 @@
 
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- The link viewer, and checking GitHub for updates. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Installing Jolt's own updates. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- The morning "Working from home today?" check-in. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Reads whether the Private DNS web filter is on. -->
@@ -41,6 +45,27 @@
         <receiver
             android:name=".CheckInReceiver"
             android:exported="false" />
+
+        <receiver
+            android:name=".UpdateReceiver"
+            android:exported="false" />
+
+        <!-- Opens web links from emails and messages without a browser. Its own task, hidden
+             from the app switcher like the rest of Jolt. -->
+        <activity
+            android:name=".LinkActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="app.jolt.links">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="http" />
+                <data android:scheme="https" />
+            </intent-filter>
+        </activity>
 
         <service
             android:name=".JoltService"
