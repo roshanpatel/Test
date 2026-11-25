@@ -18,11 +18,14 @@
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
 
+    <!-- Cleartext: many email links start with an http:// click-tracking address that then
+         redirects to the real (https) page. Only the link viewer loads web pages. -->
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         android:theme="@style/Theme.Jolt">
 
         <!-- Hidden from the app switcher: swiping Jolt away there kills the process running
