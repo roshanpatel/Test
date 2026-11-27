@@ -137,5 +137,11 @@ Run the unit tests with `./gradlew test`.
 
 - Rebooting into Safe Mode disables all third-party apps, Jolt included.
 - `adb uninstall` from a computer can't be blocked.
+- While settings are unlocked and no block is running, Jolt can be force-stopped on purpose, and
+  it stays off until opened again. Lock settings to prevent that: while locked or blocked, the
+  "Force stop?" confirmation is closed for any app.
+
+To uninstall Jolt for good without a reset: request an unlock and wait 24 hours, or restart in
+Safe Mode (Jolt doesn't run there) and uninstall from Settings.
 - Using QUERY_ALL_PACKAGES and an accessibility service for this purpose is fine for personal
   installs, but publishing on Google Play would need policy declarations and review.

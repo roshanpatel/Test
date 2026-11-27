@@ -132,6 +132,7 @@ class JoltService : AccessibilityService(), EngineUi {
                     kickOut(DNS_LOCKED)
                     return
                 }
+                if (needsTextCheck(pkg) && guardActive()) recheckSoon(pkg, blocked)
                 // Watched apps count on any window change; for other apps only a real screen
                 // (activity) counts, so their pop-ups don't end a watched session.
                 if (cls == null || (watched && !isToast(cls)) || isActivity(pkg, cls)) onAppOpened(pkg)
@@ -151,6 +152,18 @@ class JoltService : AccessibilityService(), EngineUi {
                     isDnsScreen(pkg) -> kickOut(DNS_LOCKED)
                 }
             }
+        }
+    }
+
+    /**
+     * A Settings or installer screen's words can arrive a moment after the window does, and a
+     * quick tap could slip through before then. Look again shortly after it opens.
+     */
+    private fun recheckSoon(pkg: String, blocked: Boolean) {
+        for (delay in RECHECK_DELAYS_MS) {
+            handler.postDelayed({
+                if (activeWindowPackage() == pkg && isTamperScreen(pkg, blocked)) kickOut()
+            }, delay)
         }
     }
 
@@ -235,6 +248,9 @@ class JoltService : AccessibilityService(), EngineUi {
             return blocked && !uninstalling
         }
         if (!needsTextCheck(pkg)) return false
+        // The "Force stop?" confirmation names no app, so any is stopped while guarding. Its
+        // button on an App info page has no question mark, so that still opens for other apps.
+        if (screenMentions(pkg, "force stop?") || screenMentions(pkg, "may misbehave")) return true
         // Letting Jolt install its own updates is fine: installs are still guarded above.
         if (screenMentions(pkg, "from this source")) return false
         return screenMentions(pkg, appLabel)
@@ -409,6 +425,7 @@ class JoltService : AccessibilityService(), EngineUi {
         const val DNS_LOCKED = "Private DNS is locked while Jolt is on."
         const val TAMPER_CHECK_INTERVAL_MS = 300L
         const val WATCHDOG_INTERVAL_MS = 2000L
+        val RECHECK_DELAYS_MS = longArrayOf(150L, 400L, 900L)
         const val LOCKED_NOTICE_INTERVAL_MS = 3000L
     }
 }
